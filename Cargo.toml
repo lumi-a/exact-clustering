@@ -5,14 +5,22 @@ edition = "2021"
 
 [dependencies]
 bit-set = "0.8.0"
-good_lp = { version = "1.12.0", features = ["scip", "scip_bundled"], default-features = false }
+grb = {version = "3.0.1", features = ['gurobi12']}
 ndarray = "0.16.1"
+ndarray-rand = "0.15.0"
 ordered-float = "5.0.0"
 ordermap = "0.5.5"
 pathfinding = "4.14.0"
-rand = "0.9.0"
+rand = "0.8"
 rayon = "1.10.0"
 rustc-hash = "2.1.1"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "benches"
+harness = false
 
 [lints.clippy]
 all = "warn"

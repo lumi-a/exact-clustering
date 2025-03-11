@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bit-set = "0.8.0"
+clustering = "0.2.1"
 grb = {version = "3.0.1", features = ['gurobi12']}
 ndarray = "0.16.1"
 ndarray-rand = "0.15.0"
@@ -60,3 +61,8 @@ unwrap_in_result = "warn"
 unwrap_used = "warn"
 use_debug = "warn"
 wildcard_enum_match_arm = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

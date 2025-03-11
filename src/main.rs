@@ -10,7 +10,7 @@ use price_of_hierarchy::{Clustering, ContinuousKMeansCluster};
 use rand::{distributions::Uniform, rngs::ThreadRng};
 use rayon::prelude::*;
 
-const NUM_POINTS: usize = 6;
+const NUM_POINTS: usize = 8;
 const DIMENSION: usize = 1;
 
 fn main() {
@@ -19,7 +19,7 @@ fn main() {
 
     /// Calculate the score of a population
     fn get_score(points: &Population) -> f64 {
-        Clustering::<ContinuousKMeansCluster>::optimal_hierarchy(&points.to_vec()).0
+        Clustering::<ContinuousKMeansCluster>::greedy_hierarchy(&points.to_vec()).0
     }
 
     /// Return a mutated population
@@ -48,7 +48,7 @@ fn main() {
         })
         .collect();
 
-    let generations_between_replacements = 1;
+    let generations_between_replacements = 250;
     let mut generation: u32 = 0;
     loop {
         let current_generation = generation;

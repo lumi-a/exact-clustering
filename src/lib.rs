@@ -2,12 +2,16 @@
 //! TODO: Better crate-doc.
 
 use bit_set::BitSet;
-use grb::{expr::LinExpr, prelude::*};
 use ndarray::Array1;
 use ordered_float::OrderedFloat;
 use ordermap::OrderSet;
-use pathfinding::{directed::astar::astar, num_traits::Zero};
-use std::{collections::HashSet, hash::Hash};
+use pathfinding::{directed::astar::astar, num_traits::Zero, prelude::dijkstra};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, HashSet},
+    hash::Hash,
+};
 
 type Distances = Vec<Vec<f64>>;
 
@@ -57,6 +61,8 @@ impl Cluster for DiscreteCluster {
         distances: &Self::Data,
         k: usize,
     ) -> Result<(f64, HashSet<Self>), grb::Error> {
+        use grb::{expr::LinExpr, prelude::*};
+
         let num_points = distances.len();
 
         let mut env = Env::empty()?;
@@ -138,7 +144,7 @@ impl Cluster for DiscreteCluster {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContinuousKMeansCluster(BitSet<usize>);
 impl Cluster for ContinuousKMeansCluster {
     type Data = Vec<Array1<f64>>;
@@ -151,12 +157,12 @@ impl Cluster for ContinuousKMeansCluster {
     fn calculate_cost(&self, data: &Self::Data) -> f64 {
         let mut center = Array1::zeros(data[0].raw_dim());
         for ix in self.0.iter() {
-            center = center + data[ix].clone();
+            center += &data[ix];
         }
         center /= self.0.len() as f64;
         self.0
             .iter()
-            .map(|ix| (center.clone() - data[ix].clone()).map(|x| x.powi(2)).sum())
+            .map(|ix| (&center - &data[ix]).map(|x| x.powi(2)).sum())
             .sum()
     }
     fn new_singleton(i: usize) -> Self {
@@ -171,100 +177,140 @@ impl Cluster for ContinuousKMeansCluster {
         points: &Self::Data,
         k: usize,
     ) -> Result<(f64, HashSet<Self>), grb::Error> {
-        let num_points = points.len();
-        let dim = points[0].len();
-        let max_squared_dist: f64 = points.iter().enumerate().fold(0.0, |acc, (i, p)| {
-            points.iter().skip(i + 1).fold(acc, |acc, q| {
-                acc.max((p - q).iter().map(|x| x.powi(2)).sum())
-            })
-        });
+        use clustering::kmeans;
 
-        let mut env = Env::empty()?;
-        env.set(param::OutputFlag, 0)?;
-        env.set(param::LogToConsole, 0)?;
-        let mut model = Model::with_env("clustering", &env.start()?)?;
-
-        // point_is_assigned_to_cluster[i][c] is true iff points[i] is in cluster c
-        let point_is_assigned_to_cluster: Vec<Vec<Var>> = (0..num_points)
-            .map(|_| (0..k).map(|_| add_binvar!(model)).collect())
-            .collect::<Result<_, _>>()?;
-        // cluster_center[c][j] is the j-th coordinate of the center of cluster c
-        let cluster_center: Vec<Vec<Var>> = (0..k)
-            .map(|_| (0..dim).map(|_| add_ctsvar!(model)).collect())
-            .collect::<Result<_, _>>()?;
-        // cluster_point_radius_squared[c][i] denotes the distance between points[i] and cluster_center[c]
-        let cluster_point_radius_squared: Vec<Vec<Var>> = (0..k)
-            .map(|_| {
-                (0..num_points)
-                    .map(|_| add_ctsvar!(model, bounds: 0.0..))
-                    .collect()
-            })
-            .collect::<Result<_, _>>()?;
-
-        model.set_objective(
-            cluster_point_radius_squared
-                .iter()
-                .map(|xs| xs.grb_sum())
-                .grb_sum(),
-            Minimize,
-        )?;
-
-        for (cluster_ix, radii_squared) in cluster_point_radius_squared.iter().enumerate() {
-            for (point_ix, radius_squared) in radii_squared.iter().enumerate() {
-                let constraint_name = format!(
-                    "cluster_{cluster_ix}_has_a_large_enough_radius_to_contain_point_{point_ix}"
-                );
-
-                let distance_squared = points[point_ix]
+        let max_iter = 1000; // TODO: Benchmark this?
+        let (kmeans_cost, kmeans_clusters): (f64, HashSet<Self>) = {
+            let clusters: HashSet<Self> = {
+                let samples: Vec<Vec<f64>> = points
                     .iter()
-                    .enumerate()
-                    .map(|(coordinate_ix, point_coordinate)| {
-                        // (a-b)^2 = a^2 - 2ab + b^2
-                        let a = *point_coordinate;
-                        let b = cluster_center[cluster_ix][coordinate_ix];
-                        a * a - 2.0 * a * b + b * b
-                    })
-                    .grb_sum();
-                let constraint = c!(distance_squared
-                    <= *radius_squared
-                        + max_squared_dist
-                            * (1.0 - point_is_assigned_to_cluster[point_ix][cluster_ix]));
-                model.add_qconstr(&constraint_name, constraint)?;
+                    .map(|x| x.clone().into_iter().collect())
+                    .collect();
+                let clustering = kmeans(k, &samples, max_iter);
+                let mut clusters = vec![BitSet::<usize>::default(); k];
+                for (point_ix, cluster_ix) in clustering.membership.iter().enumerate() {
+                    clusters[*cluster_ix].insert(point_ix);
+                }
+                clusters.into_iter().map(Self).collect()
+            };
+            let cost = clusters.iter().map(|x| x.calculate_cost(&points)).sum();
+            (cost, clusters)
+        };
+
+        type Cluster = BitSet<usize>;
+        #[derive(Clone, Debug)]
+        struct ClusteringNode {
+            cost: f64,
+            clusters: Vec<BitSet<usize>>,
+            next_to_add: usize,
+        }
+        impl PartialEq for ClusteringNode {
+            fn eq(&self, other: &Self) -> bool {
+                (self.cost == other.cost) & (self.clusters == other.clusters)
             }
         }
-
-        for (point_ix, is_assigned_to_cluster) in point_is_assigned_to_cluster.iter().enumerate() {
-            let constraint_name = format!("{point_ix}_is_assigned_to_exactly_one_cluster");
-            let constraint = c!(is_assigned_to_cluster.iter().grb_sum() == 1);
-            model.add_constr(&constraint_name, constraint)?;
+        impl Eq for ClusteringNode {}
+        // Order them by highest cost first
+        impl Ord for ClusteringNode {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                // TODO: Check if using partial_cmp is faster
+                other
+                    .cost
+                    .total_cmp(&self.cost)
+                    .then_with(|| self.clusters.cmp(&other.clusters))
+            }
         }
-
-        // TODO: Try setting start-values using kmeans++
-        model.optimize()?;
-
-        let opt_value: f64 = model.get_attr(attr::ObjVal)?;
-        let mut clusters: Vec<BitSet<usize>> = vec![BitSet::default(); num_points];
-        // Immediately terminate the function if any errors are encountered
-        for (point_ix, assigned_to) in point_is_assigned_to_cluster.iter().enumerate() {
-            for (cluster_ix, assigned) in assigned_to.iter().enumerate() {
-                if model.get_obj_attr(attr::X, assigned)? > 0.5 {
-                    clusters[cluster_ix].insert(point_ix);
+        impl PartialOrd for ClusteringNode {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        type Costs = FxHashMap<Cluster, f64>;
+        impl ClusteringNode {
+            fn join<'a>(
+                &'a self,
+                costs: &'a mut Costs,
+                points: &'a Vec<Array1<f64>>,
+                k: usize,
+            ) -> impl Iterator<Item = Self> + use<'a> {
+                (0..self.clusters.len())
+                    .map(move |cluster_ix| {
+                        let mut clustering_node = self.clone();
+                        let cluster_to_edit =
+                            unsafe { clustering_node.clusters.get_unchecked_mut(cluster_ix) };
+                        clustering_node.cost -=
+                            unsafe { costs.get(cluster_to_edit).unwrap_unchecked() };
+                        cluster_to_edit.insert(clustering_node.next_to_add);
+                        clustering_node.cost += *costs
+                            .entry(cluster_to_edit.clone())
+                            .or_insert_with_key(|cluster| {
+                                let mut center = Array1::zeros(points[0].raw_dim());
+                                for ix in cluster {
+                                    center += &points[ix];
+                                }
+                                center /= cluster.len() as f64;
+                                cluster
+                                    .iter()
+                                    .map(|ix| (&center - &points[ix]).map(|x| x.powi(2)).sum())
+                                    .sum()
+                            });
+                        clustering_node.next_to_add += 1;
+                        clustering_node
+                    })
+                    .chain((self.clusters.len() < k).then(|| {
+                        let mut clustering_node = self.clone();
+                        let mut singleton: BitSet<usize> = BitSet::default();
+                        singleton.insert(clustering_node.next_to_add);
+                        clustering_node.clusters.push(singleton);
+                        clustering_node.next_to_add += 1;
+                        clustering_node
+                    }))
+            }
+            fn empty() -> Self {
+                Self {
+                    clusters: Vec::new(),
+                    cost: 0.0,
+                    next_to_add: 0,
                 }
             }
         }
-        let clusters: HashSet<Self> = clusters.into_iter().map(Self).collect();
 
-        // Verify objective function
-        #[cfg(debug_assertions)]
-        {
-            let objective_value_from_centers: f64 = clusters
-                .iter()
-                .map(|cluster| cluster.calculate_cost(points))
-                .sum();
-            debug_assert!((opt_value - objective_value_from_centers).abs() < 1e-4, "The objective, calculated from the chunk-centers, should not deviate too much from the objective gurobi calculated.");
+        let mut to_see: BinaryHeap<ClusteringNode> = BinaryHeap::new();
+        to_see.push(ClusteringNode::empty());
+        let mut costs: FxHashMap<Cluster, f64> = FxHashMap::default();
+        let empty: BitSet<usize> = BitSet::default();
+        costs.insert(empty, 0.0);
+        for i in 0..points.len() {
+            let mut singleton: BitSet<usize> = BitSet::default();
+            singleton.insert(i);
+            costs.insert(singleton, 0.0);
         }
 
-        Ok((opt_value, clusters))
+        let mut min_cost = kmeans_cost;
+        while let Some(clustering_node) = to_see.pop() {
+            if clustering_node.clusters.len() == k && clustering_node.next_to_add == points.len() {
+                return Ok((
+                    clustering_node.cost,
+                    clustering_node
+                        .clusters
+                        .into_iter()
+                        .map(ContinuousKMeansCluster)
+                        .collect(),
+                ));
+            }
+            for successor_clustering in clustering_node.join(&mut costs, &points, k) {
+                if successor_clustering.cost < min_cost {
+                    if successor_clustering.clusters.len() == k
+                        && successor_clustering.next_to_add == points.len()
+                    {
+                        min_cost = successor_clustering.cost;
+                    }
+                    to_see.push(successor_clustering);
+                }
+            }
+        }
+        // This can only happen due to floating-point-rounding-errors.
+        Ok((kmeans_cost, kmeans_clusters))
     }
 }
 
@@ -324,6 +370,9 @@ where
         clusters.swap_remove_index(j);
 
         // Update cluster_costs
+        // TODO: For continuous k-means, we could store the centroids of each cluster, the
+        // merged centroid should then be (size_a * centroid_a + size_b * centroid_b) / (size_a + size_b),
+        // right?
         let cluster_cost_i = clusters[i].calculate_cost(data);
         cluster_costs[i] = cluster_cost_i;
         cluster_costs.swap_remove(j);
@@ -346,26 +395,19 @@ where
             .collect();
 
         let initial_clustering = Clustering::new(num_points);
-        let solution = astar(
+        let solution = dijkstra(
             &initial_clustering,
             |clustering| {
                 // TODO: Is collecting this into a vector really necessary here?
-                let neighbors: Vec<(Clustering<C>, MaxRatio)> = clustering
+                let opt_cost = opt_for_fixed_k[clustering.clusters.len() - 1];
+                let vec: Vec<_> = clustering
                     .get_all_merges(data)
-                    .map(|clustering| {
-                        // This can be optimized slightly by implementing an own version of astar
-                        // and using hierarchies instead of calling clustering.clusters.len() every time
-                        let ratio = MaxRatio::new(
-                            clustering.cost / opt_for_fixed_k[clustering.clusters.len()],
-                        );
-                        (clustering, ratio)
+                    .map(|new_clustering| {
+                        let ratio = MaxRatio::new(new_clustering.cost / opt_cost);
+                        (new_clustering, ratio)
                     })
                     .collect();
-                neighbors
-            },
-            // TODO: This is a terrible heuristic. Instead of taking the maximum of
-            |clustering| {
-                MaxRatio::new(clustering.cost / opt_for_fixed_k[clustering.clusters.len()])
+                vec
             },
             |clustering| clustering.clusters.len() == 1,
         )
@@ -375,7 +417,7 @@ where
     }
 
     #[must_use]
-    pub fn greedy_hierarchy(data: &C::Data) -> (Vec<Clustering<C>>, f64) {
+    pub fn greedy_hierarchy(data: &C::Data) -> (f64, Vec<Clustering<C>>) {
         let num_points = C::num_points(data);
 
         let mut clustering = Clustering::new(num_points);
@@ -394,7 +436,7 @@ where
             solution.push(clustering.clone());
         }
 
-        (solution, highest_ratio.0 .0)
+        (highest_ratio.0 .0, solution)
     }
 }
 // Only consider self.clusters in equality-checks
@@ -525,6 +567,35 @@ mod tests {
                 "Score should exactly match expected score."
             );
         }
+    }
+
+    #[test]
+    fn optimal_simple_continuous_k_means_clustering() {
+        let points = vec![
+            array![0.0, 0.0],
+            array![0.0, 2.0],
+            array![3.0, 0.0],
+            array![3.0, 2.0],
+        ];
+        let (score, clusters) = ContinuousKMeansCluster::optimal_clustering(&points, 2)
+            .expect("Calculating the optimal clustering should not fail.");
+        assert_eq!(clusters.len(), 2);
+        let expected_clusters: HashSet<ContinuousKMeansCluster> = [
+            ContinuousKMeansCluster((0..=1).collect()),
+            ContinuousKMeansCluster((2..=3).collect()),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            clusters, expected_clusters,
+            "Clusters should match expected clusters."
+        );
+
+        assert!(
+            (score - 4.0).abs() < 1e-6,
+            "Score should be close to the expected score"
+        );
     }
 
     #[test]

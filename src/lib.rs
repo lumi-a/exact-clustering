@@ -2,10 +2,7 @@
 //! TODO: Better crate-doc.
 
 use bit_set::BitSet;
-use grb::{
-    expr::LinExpr,
-    prelude::*,
-};
+use grb::{expr::LinExpr, prelude::*};
 use ndarray::Array1;
 use ordered_float::OrderedFloat;
 use ordermap::OrderSet;
@@ -39,9 +36,14 @@ impl Cluster for DiscreteCluster {
         data.len()
     }
     fn calculate_cost(&self, data: &Self::Data) -> f64 {
-        self.0.iter().fold(f64::MAX, |acc, j| {
-            acc.min(self.0.iter().map(|k| data[k][j]).sum())
-        })
+        self.0
+            .iter()
+            .map(|center_candidate| {
+                let center_distances = &data[center_candidate];
+                self.0.iter().map(|i| center_distances[i]).sum()
+            })
+            .min_by(f64::total_cmp)
+            .unwrap_or(0.0)
     }
     fn new_singleton(i: usize) -> Self {
         let mut bv: BitSet<usize> = Default::default();
@@ -107,7 +109,7 @@ impl Cluster for DiscreteCluster {
         model.optimize()?;
 
         let opt_value: f64 = model.get_attr(attr::ObjVal)?;
-        let mut clusters: Vec<BitSet<usize>> = vec![Default::default(); num_points];
+        let mut clusters: Vec<BitSet<usize>> = vec![BitSet::default(); num_points];
         // Immediately terminate the function if any errors are encountered
         for (point_ix, assigned_to) in var_point_is_assigned_to.iter().enumerate() {
             for (cluster_ix, assigned) in assigned_to.iter().enumerate() {
@@ -116,7 +118,11 @@ impl Cluster for DiscreteCluster {
                 }
             }
         }
-        let clusters = HashSet::from_iter(clusters.into_iter().map(|cluster| Self(cluster)));
+        let clusters: HashSet<Self> = clusters
+            .into_iter()
+            .filter(|cluster| !cluster.is_empty())
+            .map(Self)
+            .collect();
 
         // Verify objective function
         #[cfg(debug_assertions)]
@@ -125,7 +131,7 @@ impl Cluster for DiscreteCluster {
                 .iter()
                 .map(|cluster| cluster.calculate_cost(distances))
                 .sum();
-            debug_assert!((opt_value - objective_value_from_centers).abs() < 1e-6, "The objective, calculated from the chunk-centers, should not deviate too much from the objective gurobi calculated.");
+            debug_assert!((opt_value - objective_value_from_centers).abs() < 1e-6, "The objective calculated from the chunk-centers ({objective_value_from_centers}), should not deviate too much from the objective gurobi calculated ({opt_value}).");
         }
 
         Ok((opt_value, clusters))
@@ -294,47 +300,46 @@ where
         // but for the merge, we do want to see cluster_j (for the union)
         // and we won't need to see cluster_i (because it's cloned and
         // modified in-place).
-        self.clusters
-            .iter()
-            .enumerate()
-            .flat_map(move |(j, cluster_j)| {
-                (0..j).map(move |i| {
-                    let mut clusters = self.clusters.clone();
-                    let mut cluster_costs = self.cluster_costs.clone();
-                    let mut cost = self.cost;
+        (0..self.clusters.len())
+            .flat_map(move |j| (0..j).map(move |i| self.merge_clusters(data, j, i)))
+    }
 
-                    // Deduct cluster_costs[i] and cluster_costs[j] from cost, we'll re-add the new cost later
-                    cost -= cluster_costs[i] + cluster_costs[j];
+    fn merge_clusters(&self, data: &<C as Cluster>::Data, j: usize, i: usize) -> Clustering<C> {
+        let cluster_j = &self.clusters[j];
+        let mut clusters = self.clusters.clone();
+        let mut cluster_costs = self.cluster_costs.clone();
+        let mut cost = self.cost;
 
-                    // Merge clusters, do evil hack to update clusters[i], as seen in
-                    // https://github.com/indexmap-rs/indexmap/issues/362#issuecomment-2495107460
-                    let mut merged_cluster = clusters.swap_remove_index(i).unwrap();
-                    merged_cluster.merge_with(cluster_j);
-                    let (inserted_index, was_new) = clusters.insert_full(merged_cluster);
-                    debug_assert!(was_new);
-                    clusters.swap_indices(i, inserted_index);
-                    // `clusters` should now be the same, including orders of elements, except clusters[i] is updated.
-                    clusters.swap_remove_index(j);
+        // Deduct cluster_costs[i] and cluster_costs[j] from cost, we'll re-add the new cost later
+        cost -= cluster_costs[i] + cluster_costs[j];
 
-                    // Update cluster_costs
-                    let cluster_cost_i = clusters[i].calculate_cost(data);
-                    cluster_costs[i] = cluster_cost_i;
-                    cluster_costs.swap_remove(j);
+        // Merge clusters, do evil hack to update clusters[i], as seen in
+        // https://github.com/indexmap-rs/indexmap/issues/362#issuecomment-2495107460
+        let mut merged_cluster = clusters.swap_remove_index(i).unwrap();
+        merged_cluster.merge_with(cluster_j);
+        let (inserted_index, was_new) = clusters.insert_full(merged_cluster);
+        debug_assert!(was_new);
+        clusters.swap_indices(i, inserted_index);
+        // `clusters` should now be the same, including orders of elements, except clusters[i] is updated.
+        clusters.swap_remove_index(j);
 
-                    // Re-add the new cluster_cost to cost
-                    cost += cluster_cost_i;
+        // Update cluster_costs
+        let cluster_cost_i = clusters[i].calculate_cost(data);
+        cluster_costs[i] = cluster_cost_i;
+        cluster_costs.swap_remove(j);
 
-                    Self {
-                        clusters,
-                        cluster_costs,
-                        cost,
-                    }
-                })
-            })
+        // Re-add the new cluster_cost to cost
+        cost += cluster_cost_i;
+
+        Self {
+            clusters,
+            cluster_costs,
+            cost,
+        }
     }
 
     #[must_use]
-    pub fn optimal_hierarchy(data: &C::Data) -> (Vec<Clustering<C>>, f64) {
+    pub fn optimal_hierarchy(data: &C::Data) -> (f64, Vec<Clustering<C>>) {
         let num_points = C::num_points(data);
         let opt_for_fixed_k: Vec<f64> = std::iter::once(0.0)
             .chain((1..=num_points).map(|k| C::optimal_clustering(data, k).unwrap().0))
@@ -366,7 +371,7 @@ where
         )
         .unwrap();
 
-        (solution.0, solution.1 .0 .0)
+        (solution.1 .0 .0, solution.0)
     }
 
     #[must_use]
@@ -430,5 +435,208 @@ impl Zero for MaxRatio {
     }
     fn is_zero(&self) -> bool {
         self.0 == OrderedFloat(f64::NEG_INFINITY)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::array;
+
+    fn get_grid() -> Vec<Array1<f64>> {
+        // Grid that looks like this:
+        //
+        //   ::  ::
+        //
+        //   ::  ::
+        //
+        [0, 3]
+            .iter()
+            .flat_map(|big_x| {
+                [0, 3].iter().flat_map(move |big_y| {
+                    [0, 1].iter().flat_map(move |small_x| {
+                        [0, 1].iter().map(move |small_y| {
+                            array![f64::from(big_x + small_x), f64::from(big_y + small_y)]
+                        })
+                    })
+                })
+            })
+            .collect()
+    }
+
+    fn get_distances<F>(points: &Vec<Array1<f64>>, element_function: &F) -> Distances
+    where
+        F: Fn(f64) -> f64,
+    {
+        points
+            .iter()
+            .map(|p| {
+                points
+                    .iter()
+                    .map(|q| (p - q).into_iter().map(element_function).sum())
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn optimal_discrete_k_median_clustering() {
+        let distances = get_distances(&get_grid(), &|x| x.abs());
+        let expected_clusters: HashSet<DiscreteCluster> = [0..4, 4..8, 8..12, 12..16]
+            .into_iter()
+            .map(|x| DiscreteCluster(x.collect()))
+            .collect();
+
+        let (score, clusters) = DiscreteCluster::optimal_clustering(&distances, 4)
+            .expect("Calculating the optimal clustering should not fail.");
+        assert_eq!(
+            clusters, expected_clusters,
+            "Clusters should match expected clusters."
+        );
+        #[allow(clippy::float_cmp, reason = "This comparison should be exact.")]
+        {
+            assert_eq!(
+                score,
+                4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
+                "Score should exactly match expected score."
+            );
+        }
+    }
+
+    #[test]
+    fn optimal_discrete_k_means_clustering() {
+        let distances = get_distances(&get_grid(), &|x| x.powi(2));
+        let expected_clusters: HashSet<DiscreteCluster> = [0..4, 4..8, 8..12, 12..16]
+            .into_iter()
+            .map(|x| DiscreteCluster(x.collect()))
+            .collect();
+
+        let (score, clusters) = DiscreteCluster::optimal_clustering(&distances, 4)
+            .expect("Calculating the optimal clustering should not fail.");
+        assert_eq!(
+            clusters, expected_clusters,
+            "Clusters should match expected clusters."
+        );
+        #[allow(clippy::float_cmp, reason = "This comparison should be exact.")]
+        {
+            assert_eq!(
+                score,
+                4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
+                "Score should exactly match expected score."
+            );
+        }
+    }
+
+    #[test]
+    fn optimal_discrete_k_means_hierarchy() {
+        // Points like this:
+        //
+        //  .
+        //  .  .
+        //                  .
+        //
+        //  :.              .     .
+        //
+
+        let triangle = [array![0.0, 0.0], array![0.0, 1.0], array![1.5, 0.0]];
+        let points: Vec<Array1<f64>> = [
+            triangle.clone(),
+            triangle.clone().map(|v| v * 2.0 + array![0.0, 4.0]),
+            triangle.clone().map(|v| v * 4.0 + array![0.0, 16.0]),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let distances = get_distances(&points, &|x| x.abs());
+
+        let (score, hierarchy) = Clustering::<DiscreteCluster>::optimal_hierarchy(&distances);
+        assert_eq!(hierarchy.len(), points.len());
+
+        let expected_hierarchy: Vec<HashSet<DiscreteCluster>> = [
+            vec![
+                0..=0,
+                1..=1,
+                2..=2,
+                3..=3,
+                4..=4,
+                5..=5,
+                6..=6,
+                7..=7,
+                8..=8,
+            ],
+            vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5, 6..=6, 7..=7, 8..=8],
+            vec![0..=2, 3..=3, 4..=4, 5..=5, 6..=6, 7..=7, 8..=8],
+            vec![0..=2, 3..=4, 5..=5, 6..=6, 7..=7, 8..=8],
+            vec![0..=2, 3..=5, 6..=6, 7..=7, 8..=8],
+            vec![0..=2, 3..=5, 6..=7, 8..=8],
+            vec![0..=2, 3..=5, 6..=8],
+            vec![0..=5, 6..=8],
+            vec![0..=8],
+        ]
+        .into_iter()
+        .map(|v| {
+            v.into_iter()
+                .map(|x| DiscreteCluster(x.collect()))
+                .collect()
+        })
+        .collect::<Vec<_>>();
+
+        for (clustering, expected_clustering) in hierarchy.into_iter().zip(expected_hierarchy) {
+            let clusterset: HashSet<DiscreteCluster> = clustering.clusters.into_iter().collect();
+            assert_eq!(clusterset, expected_clustering);
+        }
+        #[allow(clippy::float_cmp, reason = "This comparison should be exact.")]
+        {
+            assert_eq!(
+                score, 1.0,
+                "Each level of the hierarchy should be an optimal clustering."
+            );
+        }
+    }
+
+    #[test]
+    fn suboptimal_discrete_k_means_hierarchy() {
+        // Points like this:
+        //
+        // ..    .     .     ..
+        //
+
+        let points: Vec<Array1<f64>> = vec![
+            array![0.0],
+            array![1e-9],
+            array![(3.0f64.sqrt() - 1.0) / 2.0],
+            array![(3.0 - 3.0f64.sqrt()) / 2.0],
+            array![1.0],
+            array![1.0 + 2e-9],
+        ];
+        let distances = get_distances(&points, &|x| x.abs());
+
+        let (score, hierarchy) = Clustering::<DiscreteCluster>::optimal_hierarchy(&distances);
+        assert_eq!(hierarchy.len(), points.len());
+
+        let expected_hierarchy: Vec<HashSet<DiscreteCluster>> = [
+            vec![0..=0, 1..=1, 2..=2, 3..=3, 4..=4, 5..=5],
+            vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5],
+            vec![0..=1, 2..=2, 3..=3, 4..=5],
+            vec![0..=2, 3..=3, 4..=5],
+            vec![0..=2, 3..=5],
+            vec![0..=5],
+        ]
+        .into_iter()
+        .map(|v| {
+            v.into_iter()
+                .map(|x| DiscreteCluster(x.collect()))
+                .collect()
+        })
+        .collect::<Vec<_>>();
+
+        for (clustering, expected_clustering) in hierarchy.into_iter().zip(expected_hierarchy) {
+            let clusterset: HashSet<DiscreteCluster> = clustering.clusters.into_iter().collect();
+            assert_eq!(clusterset, expected_clustering);
+        }
+        assert!(
+            (score - (1.0 + 3.0f64.sqrt()) / 2.0).abs() <= 1e-3,
+            "Score should be close to 1.366."
+        );
     }
 }

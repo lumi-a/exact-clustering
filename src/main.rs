@@ -19,7 +19,7 @@ fn main() {
 
     /// Calculate the score of a population
     fn get_score(points: &Population) -> f64 {
-        Clustering::<ContinuousKMeansCluster>::optimal_hierarchy(&points.to_vec()).1
+        Clustering::<ContinuousKMeansCluster>::optimal_hierarchy(&points.to_vec()).0
     }
 
     /// Return a mutated population

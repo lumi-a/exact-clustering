@@ -1,5 +1,46 @@
-//! Finding optimal clusterings and hierarchical clusterings.
-//! TODO: Better crate-doc.
+//! Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and [hierarchical clusterings](https://en.wikipedia.org/wiki/Hierarchical_clustering). If you only need approximate clusterings, there are
+//! excellent [other crates](https://www.arewelearningyet.com/clustering/) available.
+//!
+//! # Example
+//! TODO: Add [`Cost::price_of_hierarchy`], [`Cost::price_of_greedy`] examples.
+//! ```
+//! use ndarray::prelude::*;
+//! use price_of_hierarchy::{Cost as _, Discrete, KMeans};
+//! use std::collections::BTreeSet;
+//!
+//! // Set of 2d-points looking like [⠁⠄⠄⠠]
+//! // This has a uniqe optimal 2-clustering for all three problems.
+//! let points = vec![
+//!     array![0.0, 2.0],
+//!     array![2.0, 0.0],
+//!     array![4.0, 0.0],
+//!     array![7.0, 0.0],
+//! ];
+//! // Get 2-clusterings for different cost-functions:
+//! let (discrete_2median_score, discrete_2median_clusters) =
+//!     Discrete::kmedian(&points).unwrap().optimal_clustering(2);
+//! let (continuous_2means_score, continuous_2means_clusters) =
+//!     KMeans::new(&points).unwrap().optimal_clustering(2);
+//!
+//! assert_eq!(discrete_2median_score, 5.0);
+//! assert_eq!(continuous_2means_score, 8.5);
+//!
+//! // Each cluster in the returned clustering is a set of point-indices:
+//! assert_eq!(
+//!     BTreeSet::from([BTreeSet::from([0]), BTreeSet::from([1, 2, 3])]),
+//!     discrete_2median_clusters
+//!         .into_iter()
+//!         .map(BTreeSet::from_iter)
+//!         .collect(),
+//! );
+//! assert_eq!(
+//!     BTreeSet::from([BTreeSet::from([0, 1]), BTreeSet::from([2, 3])]),
+//!     continuous_2means_clusters
+//!         .into_iter()
+//!         .map(BTreeSet::from_iter)
+//!         .collect(),
+//! );
+//! ```
 
 use core::hash::{self, Hash};
 use core::{cmp, ops};
@@ -15,8 +56,15 @@ use std::collections::BinaryHeap;
 /// We'll hopefully never have to calculate clusters on more than 32 points, so 32 bits is enough for now.
 ///
 /// If you are not on a 32-bit-or-above-platform, this will cause issues with indices.
-#[cfg(not(target_pointer_width = "32"))]
+#[cfg(not(target_pointer_width = "16"))]
 pub type Storage = u32;
+
+/// The maximum number of points we can cluster before we overflow [`Storage`].
+#[expect(
+    clippy::as_conversions,
+    reason = "`Storage::BITS` will always fit into a `usize`."
+)]
+pub const MAX_POINT_COUNT: usize = Storage::BITS as usize;
 
 /// A compact representation of a cluster of points, using a bitset.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -85,6 +133,7 @@ impl Cluster {
 pub struct ClusterIter(Storage);
 impl Iterator for ClusterIter {
     type Item = usize;
+
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.0 == 0 {
@@ -98,6 +147,26 @@ impl Iterator for ClusterIter {
             self.0 &= self.0 - 1;
             Some(ix)
         }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        #[expect(
+            clippy::as_conversions,
+            reason = "I assume `usize` is at least `Storage`."
+        )]
+        let count = self.0.count_ones() as usize;
+        (count, Some(count))
+    }
+}
+
+impl IntoIterator for Cluster {
+    type Item = usize;
+    type IntoIter = ClusterIter;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        ClusterIter(self.0)
     }
 }
 
@@ -128,8 +197,8 @@ pub type Clustering = FxHashSet<Cluster>;
 /// Entry `Distances[i][j]` corresponds to the distance between points `i` and `j`.
 type Distances = Vec<Vec<f64>>;
 
-/// A rectangular matrix whose column-vectors are the coordinate-vectors of the points.
-pub type Points = Vec<Array1<f64>>;
+/// A single point.
+pub type Point = Array1<f64>;
 
 #[derive(Clone, Debug)]
 /// A helper-struct for efficiently merging clusters, used in finding optimal hierarchies.
@@ -253,6 +322,7 @@ struct ClusteringNodeMergeSingle {
     /// - It ensures we enumerate the clusterings less redundantly
     ///
     /// TODO: Try not storing this, but instead doing best-first-search level-wise?
+    /// We should also use the significantly smaller u8 here.
     next_to_add: usize,
 }
 impl PartialEq for ClusteringNodeMergeSingle {
@@ -382,10 +452,11 @@ impl ops::Add for MaxRatio {
 }
 impl Zero for MaxRatio {
     fn zero() -> Self {
-        Self(f64::NEG_INFINITY)
+        Self(1.0)
     }
+    #[expect(clippy::float_cmp, reason = "This should be exact.")]
     fn is_zero(&self) -> bool {
-        self.0 == f64::NEG_INFINITY
+        self.0 == 1.0
     }
 }
 
@@ -395,6 +466,7 @@ type Costs = FxHashMap<Cluster, f64>;
 /// A trait for cost-functions for a class of clustering-problems.
 pub trait Cost {
     /// Return the total number of points that must be clustered.
+    /// This must never exceed [`MAX_POINT_COUNT`].
     fn num_points(&self) -> usize;
 
     /// Quickly calculate a not-necessarily-optimal clustering, used for speeding up the search
@@ -421,8 +493,6 @@ pub trait Cost {
     }
 
     /// Return an optimal `k`-clustering.
-    ///
-    /// TODO: Information about return-types.
     #[inline]
     fn optimal_clustering(&mut self, k: usize) -> (f64, Clustering) {
         let num_points = self.num_points();
@@ -469,10 +539,11 @@ pub trait Cost {
     /// an [optimal `k`-clustering](`Cost::optimal_clustering`).
     ///
     /// The cost-ratio of the hierarchy is the maximum of the cost-ratios across all its levels.
-    ///
     /// The price-of-hierarchy is the lowest-possible cost-ratio across all hierarchical clusterings.
     ///
-    /// TODO: Information about return-types.
+    /// For the returned vector, `vec[k]` is a tuple containing the clustering for level `k`.
+    /// For `k==0`, it returns an empty clustering. Note that the algorithm constructs this hierarchy
+    /// in reverse, starting with every point in a singleton-cluster.
     #[must_use]
     #[inline]
     fn price_of_hierarchy(&mut self) -> (f64, Vec<Clustering>) {
@@ -484,6 +555,8 @@ pub trait Cost {
         let (price_of_greedy, greedy_hierarchy) = self.price_of_greedy();
         let mut min_hierarchy_price = MaxRatio(price_of_greedy);
         let initial_clustering = ClusteringNodeMergeMultiple::new_singletons(num_points);
+        // TODO: If we ever decide to inline dijkstra, we should also have a workhorse-variable for collecting the
+        // get_all_merges results, unless inlining dijkstra makes allocations entirely obsolete due to inlined iterators.
         dijkstra(
             &initial_clustering,
             |clustering| {
@@ -509,8 +582,12 @@ pub trait Cost {
             |(path, cost)| {
                 (
                     cost.0,
-                    path.into_iter()
-                        .map(ClusteringNodeMergeMultiple::into_clustering)
+                    iter::once(Clustering::default())
+                        .chain(
+                            path.into_iter()
+                                .rev()
+                                .map(ClusteringNodeMergeMultiple::into_clustering),
+                        )
                         .collect(),
                 )
             },
@@ -523,7 +600,11 @@ pub trait Cost {
     /// each point in a singleton-cluster, and then repeatedly merging those clusters whose
     /// merging yields the smallest increase in cost.
     ///
-    /// TODO: Information about return-types.
+    /// For the returned vector, `vec[k]` is a tuple containing the greedy clustering
+    /// for level `k`, along with the [`total_cost`](Cost::total_cost) of that clustering.
+    ///
+    /// Here, `vec[0]` has a score of `0.0` and an empty clustering. Note that the clusterings
+    /// are constructed in reverse, as we start with every point in a singleton-cluster.
     fn greedy_hierarchy(&mut self) -> Vec<(f64, Clustering)> {
         let num_points = self.num_points();
 
@@ -542,19 +623,21 @@ pub trait Cost {
             clustering = best_merge;
         }
 
+        solution.push((0.0, Clustering::default()));
+        solution.reverse();
         solution
     }
 
-    /// Return the cost-ratio of a greedy hierarchical clustering. See [`Cost::price_of_hierarchy`] for
-    /// information about the cost-ratio of a hierarchical clustering.
-    ///
-    /// TODO: Information about return-types.
+    /// Return the cost-ratio and the hierarchy of a greedy hierarchical clustering.
+    /// See [`Cost::price_of_hierarchy`] for information about the cost-ratio of a hierarchical clustering,
+    /// and the returned hierarchy.
     #[must_use]
     #[inline]
     fn price_of_greedy(&mut self) -> (f64, Vec<Clustering>) {
         let mut max_ratio = MaxRatio::zero();
         let greedy_hierarchy = self.greedy_hierarchy();
-        for (cost, clustering) in &greedy_hierarchy {
+        // Skip the first (empty) level
+        for (cost, clustering) in greedy_hierarchy.iter().skip(1) {
             let opt_cost = self.optimal_clustering(clustering.len()).0;
             let ratio = MaxRatio::new(*cost, opt_cost);
             max_ratio = max_ratio + ratio;
@@ -572,7 +655,9 @@ pub trait Cost {
 /// will always be calculated by choosing the center yielding the smallest cost.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Discrete {
+    /// The distances between the points.
     distances: Distances,
+    /// A cache for storing already-calculated costs of clusters.
     costs: Costs,
 }
 impl Cost for Discrete {
@@ -604,7 +689,7 @@ impl Cost for Discrete {
 /// This will usually be a metric, but the only part of the code that assumes non-negativity is [`MaxRatio::new`],
 /// symmetry and triangle-inequality are not assumed anywhere, I believe.
 fn distances_from_points_with_distfun(
-    points: &Points,
+    points: &[Point],
     metric: impl Fn(&Array1<f64>, &Array1<f64>) -> f64,
 ) -> Distances {
     points
@@ -616,7 +701,7 @@ fn distances_from_points_with_distfun(
 ///
 /// [`MaxRatio::new`] assumes non-negativity. I believe all other norm-properties may be violated without error.
 fn distances_from_points_with_norm(
-    points: &Points,
+    points: &[Point],
     norm: impl Fn(Array1<f64>) -> f64,
 ) -> Distances {
     distances_from_points_with_distfun(points, |p, q| norm(p - q))
@@ -626,24 +711,30 @@ fn distances_from_points_with_norm(
 ///
 /// Only [`MaxRatio::new`] assumes non-negativity, I believe.
 fn distances_from_points_with_element_norm(
-    points: &Points,
+    points: &[Point],
     elementnorm: impl Fn(f64) -> f64,
 ) -> Distances {
     distances_from_points_with_norm(points, |p| p.map(|x| elementnorm(*x)).sum())
 }
 /// Create [`Distances`] from [`Points`] using the squared [Euclidean distance](https://en.wikipedia.org/wiki/Euclidean_norm).
-fn squared_euclidean_distances_from_points(points: &Points) -> Distances {
+fn squared_euclidean_distances_from_points(points: &[Point]) -> Distances {
     distances_from_points_with_element_norm(points, |x| x.powi(2))
 }
 /// Create [`Distances`] from [`Points`] using the [taxicab distance](https://en.wikipedia.org/wiki/Taxicab_geometry).
-fn taxicab_distances_from_points(points: &Points) -> Distances {
+fn taxicab_distances_from_points(points: &[Point]) -> Distances {
     distances_from_points_with_element_norm(points, f64::abs)
 }
 
 /// An error-type for creating clustering-problems.
 #[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "Extending this enum should be a breaking change."
+)]
 pub enum Error {
-    /// The number of points in the problem is too large. It must not exceed [`Storage::BITS`].
+    /// No points were supplied.
+    EmptyPoints,
+    /// The number of points in the problem is too large. It must not exceed [`MAX_POINT_COUNT`].
     TooManyPoints(usize),
     /// Two points (specified by their indices in the points-vec) have different dimensions.
     ShapeMismatch(usize, usize),
@@ -653,9 +744,9 @@ impl fmt::Display for Error {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let msg = &match self {
+            Self::EmptyPoints => "No points were supplied.".to_owned(),
             Self::TooManyPoints(pointcount) => format!(
-                "Can cluster at most {} points, but {pointcount} were supplied.",
-                Storage::BITS
+                "Can cluster at most {MAX_POINT_COUNT} points, but {pointcount} were supplied."
             ),
             Self::ShapeMismatch(ix1, ix2) => {
                 format!("Points {ix1} and {ix2} have different dimensions.",)
@@ -672,46 +763,49 @@ impl fmt::Display for Error {
 impl core::error::Error for Error {}
 
 /// Check whether a set of points is valid for clustering.
-fn verify_points(points: &Points) -> Result<&Points, Error> {
-    points.first().map_or(Ok(points), |first_point| {
-        let first_dim = first_point.raw_dim();
-        points
-            .iter()
-            .position(|p| p.raw_dim() != first_dim)
-            .map_or(Ok(points), |ix| Err(Error::ShapeMismatch(0, ix)))
-    })
+///
+/// # Errors
+/// Returns an [`Error`] if too many points are supplied or if the dimensions of the points don't match.
+fn verify_points(points: &[Point]) -> Result<&[Point], Error> {
+    let point_count = points.len();
+    if point_count > MAX_POINT_COUNT {
+        return Err(Error::TooManyPoints(point_count));
+    }
+    points
+        .first()
+        .map_or(Err(Error::EmptyPoints), |first_point| {
+            let first_dim = first_point.raw_dim();
+            points
+                .iter()
+                .position(|p| p.raw_dim() != first_dim)
+                .map_or(Ok(points), |ix| Err(Error::ShapeMismatch(0, ix)))
+        })
 }
 
 impl Discrete {
-    /// Create a discrete clustering-instance given the distances between points.
-    #[must_use]
-    fn new_with_distances(distances: Distances) -> Self {
-        Self {
-            distances,
-            costs: Costs::default(),
-        }
-    }
     /// Create a discrete `k`-means clustering instance from a given vector of points.
     ///
     /// # Errors
     /// Returns an [`Error`] if too many points are supplied or if the dimensions of the points don't match.
     #[inline]
-    pub fn squared_euclidean_from_points(points: &Points) -> Result<Self, Error> {
+    pub fn kmeans(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
-        Ok(Self::new_with_distances(
-            squared_euclidean_distances_from_points(verified_points),
-        ))
+        Ok(Self {
+            distances: squared_euclidean_distances_from_points(verified_points),
+            costs: Costs::default(),
+        })
     }
     /// Create a discrete `k`-median clustering instance from a given vector of points.
     ///
     /// # Errors
     /// Returns an [`Error`] if too many points are supplied or if the dimensions of the points don't match.
     #[inline]
-    pub fn median_from_points(points: &Points) -> Result<Self, Error> {
+    pub fn kmedian(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
-        Ok(Self::new_with_distances(taxicab_distances_from_points(
-            verified_points,
-        )))
+        Ok(Self {
+            distances: taxicab_distances_from_points(verified_points),
+            costs: Costs::default(),
+        })
     }
 }
 
@@ -725,7 +819,7 @@ impl Discrete {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KMeans {
     /// The points to be clustered.
-    points: Points,
+    points: Vec<Point>,
     /// A cache for storing already-calculated costs of clusters.
     costs: Costs,
 }
@@ -738,9 +832,12 @@ impl Cost for KMeans {
     fn cost(&mut self, cluster: Cluster) -> f64 {
         *self.costs.entry(cluster).or_insert_with(|| {
             let mut center = Array1::zeros(self.points[0].raw_dim());
-            for i in cluster.iter() {
-                center += unsafe { self.points.get_unchecked(i) };
-            }
+
+            // For some reason, this is 30% faster than a for-loop.
+            cluster
+                .iter()
+                .for_each(|i| center += unsafe { self.points.get_unchecked(i) });
+
             // TODO: Check we don't divide by 0
             center /= f64::from(cluster.len());
             cluster
@@ -780,90 +877,39 @@ impl KMeans {
     /// # Errors
     /// Returns an [`Error`] if too many points are supplied or if the dimensions of the points don't match.
     #[inline]
-    pub fn new(points: &Points) -> Result<Self, Error> {
+    pub fn new(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
         Ok(Self {
-            points: verified_points.clone(),
+            points: verified_points.to_vec(),
             costs: Costs::default(),
         })
     }
+}
+
+/// TODO: This method should not exist, maybe we can offer a better api for returned cluster-indices.
+#[inline]
+pub fn cluster_from_iterator<I: IntoIterator<Item = usize>>(it: I) -> Cluster {
+    let mut cluster = Cluster::empty();
+    for i in it {
+        cluster.insert(i);
+    }
+    cluster
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::f64::consts::SQRT_2;
+    use itertools::Itertools as _;
     use ndarray::array;
-    use std::f64;
-
-    fn square_grid() -> Points {
-        // Looks like this:
-        //
-        //  ::  ::
-        //
-        //  ::  ::
-        //
-        vec![
-            array![0.0, 0.0],
-            array![1.0, 0.0],
-            array![0.0, 1.0],
-            array![1.0, 1.0],
-            array![0.0, 4.0],
-            array![1.0, 4.0],
-            array![0.0, 5.0],
-            array![1.0, 5.0],
-            array![4.0, 0.0],
-            array![5.0, 0.0],
-            array![4.0, 1.0],
-            array![5.0, 1.0],
-            array![4.0, 4.0],
-            array![5.0, 4.0],
-            array![4.0, 5.0],
-            array![5.0, 5.0],
-        ]
-    }
-
-    fn triangle_grid() -> Points {
-        // Looks like this:
-        //
-        //  .
-        //  .  .
-        //                  .
-        //
-        //  :.              .     .
-        //
-        vec![
-            array![0.0, 0.0],
-            array![0.0, 1.0],
-            array![2.0, 0.0],
-            array![0.0, 16.0],
-            array![0.0, 20.0],
-            array![8.0, 16.0],
-            array![32.0, 0.0],
-            array![32.0, 12.0],
-            array![48.0, 0.0],
-        ]
-    }
-
-    fn cluster_from_iterator(it: impl IntoIterator<Item = usize>) -> Cluster {
-        let mut cluster = Cluster::empty();
-        for i in it {
-            cluster.insert(i);
-        }
-        cluster
-    }
-
-    fn clustering_from_iterators(
-        it: impl IntoIterator<Item = impl IntoIterator<Item = usize>>,
-    ) -> Clustering {
-        it.into_iter().map(cluster_from_iterator).collect()
-    }
+    use smallvec::smallvec;
+    use std::panic::catch_unwind;
 
     #[test]
     #[should_panic(
         expected = "Throughout the entire implementation, we should never to add the same point twice."
     )]
-    fn test_cluster_double_insert() {
+    fn cluster_double_insert() {
         let mut cluster = Cluster::singleton(7);
         cluster.insert(7);
     }
@@ -872,7 +918,7 @@ mod tests {
     #[should_panic(
         expected = "Troughout the entire implementation, we should never be merging intersecting clusters."
     )]
-    fn test_cluster_intersecting_merge() {
+    fn cluster_intersecting_merge() {
         let mut cluster7 = Cluster::singleton(7);
         let mut cluster9 = Cluster::singleton(7);
         cluster7.insert(8);
@@ -881,12 +927,12 @@ mod tests {
     }
 
     #[test]
-    fn test_cluster() {
+    fn cluster() {
         for i in 0..8 {
             let cluster = Cluster::singleton(i);
             assert!(!cluster.is_empty());
             assert_eq!(cluster.len(), 1);
-            assert_eq!(cluster.iter().collect::<Vec<_>>(), vec![i]);
+            assert_eq!(cluster.iter().collect_vec(), vec![i]);
             for j in 0..8 {
                 assert_eq!(cluster.contains(j), j == i);
                 let cluster2 = {
@@ -900,7 +946,7 @@ mod tests {
                 assert!(!cluster2.is_empty());
                 assert_eq!(cluster2.len(), if i == j { 1 } else { 2 });
                 assert_eq!(
-                    cluster2.iter().collect::<Vec<_>>(),
+                    cluster2.iter().collect_vec(),
                     match i.cmp(&j) {
                         cmp::Ordering::Less => vec![i, j],
                         cmp::Ordering::Equal => vec![i],
@@ -924,14 +970,14 @@ mod tests {
                 assert!(!cluster_div_5.is_empty());
             }
         }
-        assert_eq!(cluster_div_3.iter().collect::<Vec<_>>(), vec![3, 6, 9, 12]);
-        assert_eq!(cluster_div_5.iter().collect::<Vec<_>>(), vec![5, 10]);
+        assert_eq!(cluster_div_3.iter().collect_vec(), vec![3, 6, 9, 12]);
+        assert_eq!(cluster_div_5.iter().collect_vec(), vec![5, 10]);
         let merged = {
             let mut merged = cluster_div_3;
             merged.union_with(cluster_div_5);
             merged
         };
-        assert_eq!(merged.iter().collect::<Vec<_>>(), vec![3, 5, 6, 9, 10, 12]);
+        assert_eq!(merged.iter().collect_vec(), vec![3, 5, 6, 9, 10, 12]);
 
         assert_eq!(merged.to_string(), "...#.##..##.#...................");
     }
@@ -942,9 +988,7 @@ mod tests {
         reason = "We'd like to catch the errors."
     )]
     #[test]
-    fn test_max_ratio() {
-        use std::panic::catch_unwind;
-
+    fn max_ratio() {
         assert_eq!(MaxRatio::new(3.0, 1.5).0, 2.0);
         assert_eq!(MaxRatio::new(SQRT_2, SQRT_2).0, 1.0);
         assert_eq!(MaxRatio::new(SQRT_2, 0.0).0, f64::INFINITY);
@@ -953,7 +997,9 @@ mod tests {
         assert_eq!(MaxRatio::new(-0.0, 0.0).0, 1.0);
         assert_eq!(MaxRatio::new(0.0, -0.0).0, 1.0);
         assert_eq!(MaxRatio::new(-0.0, -0.0).0, 1.0);
+        assert!(catch_unwind(|| MaxRatio::new(1.0 - 1e-3, 1.0)).is_err());
         assert!(catch_unwind(|| MaxRatio::new(1.0 - 1e-12, 1.0)).is_ok());
+        assert!(catch_unwind(|| MaxRatio::new(0.0 - 1e-12, 0.0)).is_err());
         assert!(catch_unwind(|| MaxRatio::new(f64::INFINITY, 1.0)).is_err());
         assert!(catch_unwind(|| MaxRatio::new(f64::NAN, 1.0)).is_err());
         assert!(catch_unwind(|| MaxRatio::new(f64::NEG_INFINITY, 1.0)).is_err());
@@ -964,30 +1010,34 @@ mod tests {
         assert!(catch_unwind(|| MaxRatio::new(1.0, -1e-12)).is_err());
     }
 
-    #[test]
-    fn test_node_merge_multiple() {
-        use smallvec::smallvec;
+    macro_rules! clusterings {
+        ( $( [ $( [ $( $num:expr ),* ] ),* ] ),* $(,)? ) => {
+            [
+                $(
+                    vec![
+                        $(
+                            cluster_from_iterator([$( $num ),*]),
+                        )*
+                    ],
+                )*
+            ]
+        }
+    }
 
+    #[test]
+    fn node_merge_multiple() {
         fn clusters_are_correct(
             expected_clusterings: &[Vec<Cluster>],
             nodes: &[ClusteringNodeMergeMultiple],
         ) {
-            let actual = nodes
-                .iter()
-                .map(|x| x.clusters.to_vec())
-                .collect::<Vec<_>>();
+            let actual = nodes.iter().map(|x| x.clusters.to_vec()).collect_vec();
             assert_eq!(
                 expected_clusterings, actual,
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete = Discrete::squared_euclidean_from_points(&vec![
-            array![0.0],
-            array![1.0],
-            array![2.0],
-            array![3.0],
-        ])
-        .expect("Creating discrete should not fail.");
+        let mut discrete = Discrete::kmeans(&[array![0.0], array![1.0], array![2.0], array![3.0]])
+            .expect("Creating discrete should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeMultiple>| {
             *nodes = nodes
                 .iter()
@@ -995,19 +1045,6 @@ mod tests {
                 .collect();
         };
         let mut nodes = vec![ClusteringNodeMergeMultiple::new_singletons(4)];
-        macro_rules! clusterings {
-            ( $( [ $( [ $( $num:expr ),* ] ),* ] ),* $(,)? ) => {
-                [
-                    $(
-                        vec![
-                            $(
-                                cluster_from_iterator([$( $num ),*]),
-                            )*
-                        ],
-                    )*
-                ]
-            }
-        }
         let expected_init_clusters = smallvec![
             Cluster::singleton(0),
             Cluster::singleton(1),
@@ -1063,54 +1100,45 @@ mod tests {
         );
 
         update_nodes(&mut nodes);
-        clusters_are_correct(
-            &vec![vec![cluster_from_iterator(vec![0, 1, 2, 3])]; 18],
-            &nodes,
-        );
+        clusters_are_correct(&vec![vec![Cluster(15)]; 18], &nodes);
     }
 
     #[test]
-    fn test_node_merge_single() {
+    #[should_panic(expected = "The clusters should always be sorted, to prevent duplicates.")]
+    fn unsorted_node_merge_multiple() {
+        let unsorted = ClusteringNodeMergeMultiple {
+            clusters: smallvec![Cluster(1), Cluster(0)],
+            cost: 0.0,
+        };
+        let mut small_discrete = Discrete::kmedian(&[array![0.0], array![1.0]])
+            .expect("Creating discrete should not fail.");
+        let _: Vec<_> = unsorted
+            .get_all_merges(&mut small_discrete) // This should fail.
+            .into_iter()
+            .collect_vec();
+    }
+
+    #[test]
+    fn node_merge_single() {
         fn clusters_are_correct(
             expected_clusterings: &[Vec<Cluster>],
             nodes: &[ClusteringNodeMergeSingle],
         ) {
-            let actual = nodes
-                .iter()
-                .map(|x| x.clusters.to_vec())
-                .collect::<Vec<_>>();
+            let actual = nodes.iter().map(|x| x.clusters.to_vec()).collect_vec();
             assert_eq!(
                 expected_clusterings, actual,
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete = Discrete::squared_euclidean_from_points(&vec![
-            array![0.0],
-            array![1.0],
-            array![2.0],
-            array![3.0],
-        ])
-        .expect("Creating discrete should not fail.");
+        let mut discrete = Discrete::kmeans(&[array![0.0], array![1.0], array![2.0], array![3.0]])
+            .expect("Creating discrete should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeSingle>| {
             *nodes = nodes
                 .iter()
-                .flat_map(|n| n.get_next_nodes(&mut discrete, 3).collect::<Vec<_>>())
+                .flat_map(|n| n.get_next_nodes(&mut discrete, 3).collect_vec())
                 .collect();
         };
         let mut nodes = vec![ClusteringNodeMergeSingle::empty()];
-        macro_rules! clusterings {
-            ( $( [ $( [ $( $num:expr ),* ] ),* ] ),* $(,)? ) => {
-                [
-                    $(
-                        vec![
-                            $(
-                                cluster_from_iterator([$( $num ),*]),
-                            )*
-                        ],
-                    )*
-                ]
-            }
-        }
         clusters_are_correct(&clusterings![[]], &nodes);
 
         update_nodes(&mut nodes);
@@ -1151,177 +1179,6 @@ mod tests {
                 // Notice that [[0],[1],[2],[3]] is not in this list.
             ],
             &nodes,
-        );
-    }
-
-    #[test]
-    #[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
-    fn cost_calculation() {
-        let grid = square_grid();
-        let mut median =
-            Discrete::median_from_points(&grid).expect("Creating discrete should not fail.");
-        let mut discrete_kmeans = Discrete::squared_euclidean_from_points(&grid)
-            .expect("Creating discrete should not fail.");
-        let mut kmeans = KMeans::new(&grid).expect("Creating kmeans should not fail.");
-        for i in [0, 4, 8, 12] {
-            let cluster = cluster_from_iterator(i..(i + 4));
-            assert_eq!(median.cost(cluster), 4.0);
-            assert_eq!(discrete_kmeans.cost(cluster), 4.0);
-            assert_eq!(kmeans.cost(cluster), 4.0 * 0.5);
-        }
-    }
-
-    #[test]
-    fn optimal_discrete_k_median_clustering() {
-        let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-        let mut discrete = Discrete::median_from_points(&square_grid())
-            .expect("Creating discrete should not fail.");
-
-        let (score, clusters) = discrete.optimal_clustering(4);
-        assert_eq!(
-            clusters, expected_clusters,
-            "Clusters should match expected clusters."
-        );
-        #[expect(clippy::float_cmp, reason = "This comparison should be exact.")]
-        {
-            assert_eq!(
-                score,
-                4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
-                "Score should exactly match expected score."
-            );
-        }
-    }
-
-    #[test]
-    fn optimal_discrete_k_means_clustering() {
-        let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-        let mut discrete = Discrete::squared_euclidean_from_points(&square_grid())
-            .expect("Creating discrete should not fail.");
-
-        let (score, clusters) = discrete.optimal_clustering(4);
-        assert_eq!(
-            clusters, expected_clusters,
-            "Clusters should match expected clusters."
-        );
-        #[expect(clippy::float_cmp, reason = "This comparison should be exact.")]
-        {
-            assert_eq!(
-                score,
-                4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
-                "Score should exactly match expected score."
-            );
-        }
-    }
-
-    #[test]
-    fn optimal_continuous_k_means_clustering() {
-        let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-        let mut kmeans = KMeans::new(&square_grid()).expect("Creating kmeans should not fail.");
-
-        let (score, clusters) = kmeans.optimal_clustering(4);
-
-        assert_eq!(
-            clusters, expected_clusters,
-            "Clusters should match expected clusters."
-        );
-        let expected_score = 8.0; // 4 * (4/2)
-        assert!(
-            (score - expected_score).abs() < 1e-12,
-            "Score should be close to the expected score"
-        );
-    }
-
-    #[test]
-    fn optimal_discrete_k_median_hierarchy() {
-        let triangle_grid = triangle_grid();
-        let mut discrete = Discrete::median_from_points(&triangle_grid)
-            .expect("Creating discrete should not fail.");
-        assert_eq!(discrete.num_points(), triangle_grid.len());
-        let (score, hierarchy) = discrete.price_of_hierarchy();
-        assert_eq!(hierarchy.len(), triangle_grid.len());
-
-        let expected_hierarchy: Vec<Clustering> = [
-            vec![
-                0..=0,
-                1..=1,
-                2..=2,
-                3..=3,
-                4..=4,
-                5..=5,
-                6..=6,
-                7..=7,
-                8..=8,
-            ],
-            vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5, 6..=6, 7..=7, 8..=8],
-            vec![0..=2, 3..=3, 4..=4, 5..=5, 6..=6, 7..=7, 8..=8],
-            vec![0..=2, 3..=4, 5..=5, 6..=6, 7..=7, 8..=8],
-            vec![0..=2, 3..=5, 6..=6, 7..=7, 8..=8],
-            vec![0..=2, 3..=5, 6..=7, 8..=8],
-            vec![0..=2, 3..=5, 6..=8],
-            vec![0..=5, 6..=8],
-            vec![0..=8],
-        ]
-        .map(clustering_from_iterators)
-        .to_vec();
-
-        for (level, expected_level) in hierarchy.iter().zip(expected_hierarchy.iter()) {
-            assert_eq!(
-                level, expected_level,
-                "Hierarchy-level should match expected hierarchy-level."
-            );
-        }
-
-        #[expect(clippy::float_cmp, reason = "This comparison should be exact.")]
-        {
-            assert_eq!(
-                score, 1.0,
-                "Each level of the hierarchy should be an optimal clustering."
-            );
-        }
-    }
-
-    #[test]
-    fn suboptimal_discrete_k_median_hierarchy() {
-        // Points like this:
-        //
-        // ..    .     .     ..
-        //
-
-        let points: Points = vec![
-            array![0.0],
-            array![1e-9],
-            array![(3.0_f64.sqrt() - 1.0) / 2.0],
-            array![(3.0 - 3.0_f64.sqrt()) / 2.0],
-            array![1.0 + 1e-9],
-            array![1.0 + 3e-9],
-        ];
-        let mut discrete =
-            Discrete::median_from_points(&points).expect("Creating discrete should not fail.");
-        assert_eq!(discrete.num_points(), points.len());
-        let (score, hierarchy) = discrete.price_of_hierarchy();
-        assert_eq!(hierarchy.len(), points.len());
-
-        let expected_hierarchy: Vec<Clustering> = [
-            vec![0..=0, 1..=1, 2..=2, 3..=3, 4..=4, 5..=5],
-            vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5],
-            vec![0..=1, 2..=2, 3..=3, 4..=5],
-            vec![0..=2, 3..=3, 4..=5],
-            vec![0..=2, 3..=5],
-            vec![0..=5],
-        ]
-        .map(clustering_from_iterators)
-        .to_vec();
-
-        for (level, expected_level) in hierarchy.iter().zip(expected_hierarchy.iter()) {
-            assert_eq!(
-                level, expected_level,
-                "Hierarchy-level should match expected hierarchy-level."
-            );
-        }
-
-        assert!(
-            (score - (1.0 + 3.0_f64.sqrt()) / 2.0).abs() <= 1e-3,
-            "Score should be close to 1.366."
         );
     }
 }

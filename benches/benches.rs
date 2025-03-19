@@ -8,13 +8,15 @@
     missing_docs,
     reason = "Doc is not needed for benchmarks. Also, criterion-macros create functions I can't document."
 )]
+#![allow(clippy::unwrap_used, reason = "Benchmarks should not panic.")]
+#![allow(clippy::missing_panics_doc, reason = "Benchmarks should not panic.")]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ndarray::prelude::*;
-use price_of_hierarchy::{Cost as _, Discrete, KMeans, Points};
+use price_of_hierarchy::{Cost as _, Discrete, KMeans, Point};
 
 /// Create a 2d-grid of `width`×`height` points.
-fn grid(width: u32, height: u32) -> Points {
+fn grid(width: u32, height: u32) -> Vec<Point> {
     /// (1+√3)/2
     const PERTURBATION: f64 = 1.366_025_403_784_438_6;
 
@@ -30,7 +32,7 @@ pub fn optimal_clustering(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 (1..=grid.len()).for_each(|k| {
-                    black_box(Discrete::median_from_points(&grid).unwrap()).optimal_clustering(k);
+                    black_box(Discrete::kmedian(&grid).unwrap()).optimal_clustering(k);
                 });
             });
         },
@@ -52,7 +54,7 @@ pub fn hierarchies(c: &mut Criterion) {
 
     c.bench_function("4×4 grid, discrete k-median hierarchy", |b| {
         b.iter(|| {
-            let _: f64 = black_box(Discrete::median_from_points(&grid).unwrap())
+            let _: f64 = black_box(Discrete::kmedian(&grid).unwrap())
                 .price_of_hierarchy()
                 .0;
         });

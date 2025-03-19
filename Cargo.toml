@@ -12,15 +12,13 @@ readme = "README.md"
 [dependencies]
 clustering = "0.2.1"
 ndarray = "0.16.1"
-ndarray-rand = "0.15.0"
 pathfinding = "4.14.0"
-rand = "0.8"
-rayon = "1.10.0"
 rustc-hash = "2.1.1"
 smallvec = "1.14.0"
 
 [dev-dependencies]
 criterion = "0.5.1"
+itertools = "0.14.0"
 
 [[bench]]
 name = "benches"
@@ -148,7 +146,6 @@ unit_bindings = "warn"
 unnameable_types = "warn"
 unreachable_pub = "warn"
 unsafe_op_in_unsafe_fn = "warn"
-unused_crate_dependencies = "warn"
 unused_extern_crates = "warn"
 unused_import_braces = "warn"
 unused_lifetimes = "warn"
@@ -158,7 +155,6 @@ unused_results = "warn"
 variant_size_differences = "warn"
 
 [lints.rustdoc]
-missing_docs = "warn"
 missing_crate_level_docs = "warn"
 unescaped_backticks = "warn"
 

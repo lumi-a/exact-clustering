@@ -1,8 +1,14 @@
 #![allow(missing_docs, reason = "Docs aren't be necessary for tests.")]
 #![allow(
+    clippy::indexing_slicing,
+    reason = "Panicking indexing is fine in tests."
+)]
+#![allow(
     clippy::tests_outside_test_module,
     reason = "This is an integration-test. This is a false-positive by clippy, see https://github.com/rust-lang/rust-clippy/issues/11024"
 )]
+
+use core::iter;
 
 use itertools::Itertools as _;
 use ndarray::{array, Array1};
@@ -43,6 +49,21 @@ fn square_grid() -> Vec<Point> {
     ]
 }
 
+fn weighted_square() -> Vec<WeightedPoint> {
+    // Looks like this:
+    //
+    //  ∙  ∙
+    //
+    //  ⬤  ●
+
+    vec![
+        (4.0, array![0.0, 0.0]),
+        (2.0, array![1.0, 0.0]),
+        (1.0, array![0.0, 1.0]),
+        (1.0, array![1.0, 1.0]),
+    ]
+}
+
 fn triangle_grid() -> Vec<Point> {
     // Looks like this:
     //
@@ -65,19 +86,95 @@ fn triangle_grid() -> Vec<Point> {
     ]
 }
 
+fn get_high_kmedians_price_of_greedy_instance(d: u8) -> Vec<WeightedPoint> {
+    // Construct the example from https://arxiv.org/abs/1907.05094v1, section 4,
+    // in `d` dimensions.
+
+    // The paper used:
+    //  {-1, -(√2 - 1), (√2 - 1), 1},
+    // As the first coordinates. To politely convince the greedy-hierarchy to pick
+    // the worst-possible clustering, move the two points in the middle a bit closer
+    // together:
+    iter::once(vec![
+        -1.0,
+        -(2.0_f64.sqrt() - 1.0 - 1e-8),
+        2.0_f64.sqrt() - 1.0 - 1e-8,
+        1.0,
+    ])
+    .chain((2..=d).map(|i| {
+        // Also move these closer together:
+        let z = (3.0_f64.powi(i32::from(i) - 2) / 2.0_f64.powi(i32::from(i) - 1)).sqrt() - 1e-8;
+        vec![z, -z]
+    }))
+    .multi_cartesian_product()
+    .map(|v| {
+        (
+            // The paper puts the weights as ∞ and 1.0, but we don't allow weights to be infinite
+            // to avoid ambiguity when multiple points in the same cluster have infinite weight.
+            #[expect(clippy::float_cmp, reason = "This comparison sholud be exact.")]
+            if v[0].abs() == 1.0 { 1e16 } else { 1.0 },
+            Array1::from_vec(v),
+        )
+    })
+    .collect_vec()
+}
+
+#[test]
+fn high_kmedian_price_of_greedy() {
+    for d in 1..=3 {
+        let weighted_points = get_high_kmedians_price_of_greedy_instance(d);
+        let mut kmeans = WeightedKMeans::new(&weighted_points)
+            .expect("Creating WeightedKMeans should not fail.");
+
+        let optimal_clusterings = kmeans.optimal_clusterings();
+        let greedy_clusterings = kmeans.greedy_hierarchy();
+        let optimal_cost = optimal_clusterings[2_usize.pow(u32::from(d))].0;
+        let greedy_cost = greedy_clusterings[2_usize.pow(u32::from(d))].0;
+
+        let expected_optimal_cost = 2.0_f64.powi(i32::from(d)) * (2.0 - 2.0_f64.sqrt()).powi(2);
+        let expected_greedy_cost = 4.0_f64.mul_add(
+            3.0_f64.powi(i32::from(d) - 1),
+            2.0_f64.powi(i32::from(d) - 1) * (2.0 - 2.0_f64.sqrt()).powi(2),
+        ) - 2.0_f64.powi(i32::from(d));
+
+        assert!(optimal_cost - 1e-6 < expected_optimal_cost);
+        assert!(optimal_cost + 1e-6 > expected_optimal_cost);
+
+        assert!(greedy_cost - 1e-6 < expected_greedy_cost);
+        assert!(greedy_cost + 1e-6 > expected_greedy_cost);
+    }
+}
+
 #[test]
 #[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
-fn cost_calculation() {
+fn cost() {
     let grid = square_grid();
-    let mut median = Discrete::kmedian(&grid).expect("Creating discrete should not fail.");
+    let mut kmedian = Discrete::kmedian(&grid).expect("Creating discrete should not fail.");
     let mut discrete_kmeans = Discrete::kmeans(&grid).expect("Creating discrete should not fail.");
     let mut kmeans = KMeans::new(&grid).expect("Creating kmeans should not fail.");
     for i in [0, 4, 8, 12] {
         let cluster = cluster_from_iterator(i..(i + 4));
-        assert_eq!(median.cost(cluster), 4.0);
+        assert_eq!(kmedian.cost(cluster), 4.0);
         assert_eq!(discrete_kmeans.cost(cluster), 4.0);
         assert_eq!(kmeans.cost(cluster), 4.0 * 0.5);
     }
+}
+
+#[test]
+#[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
+fn weighted_cost() {
+    let square = weighted_square();
+    let mut kmedian =
+        Discrete::weighted_kmedian(&square).expect("Creating kmedian should not fail.");
+    let mut discrete_kmeans =
+        Discrete::weighted_kmeans(&square).expect("Creating discrete kmeans should not fail.");
+    let mut kmeans = WeightedKMeans::new(&square).expect("Creating kmeans should not fail.");
+
+    let full_cluster = cluster_from_iterator(0..4);
+    assert_eq!(kmedian.cost(full_cluster), 5.0);
+    assert_eq!(discrete_kmeans.cost(full_cluster), 5.0);
+    // Centroid should be at (0.375, 0.25)
+    assert_eq!(kmeans.cost(full_cluster), 3.375);
 }
 
 #[test]
@@ -86,15 +183,16 @@ fn optimal_discrete_k_median_clustering() {
     let mut discrete =
         Discrete::kmedian(&square_grid()).expect("Creating discrete should not fail.");
 
-    let (score, clusters) = discrete.optimal_clustering(4);
+    let optimals = discrete.optimal_clusterings();
+    let (score, clusters) = &optimals[4];
     assert_eq!(
-        clusters, expected_clusters,
+        *clusters, expected_clusters,
         "Clusters should match expected clusters."
     );
     #[expect(clippy::float_cmp, reason = "This comparison should be exact.")]
     {
         assert_eq!(
-            score,
+            *score,
             4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
             "Score should exactly match expected score."
         );
@@ -107,15 +205,15 @@ fn optimal_discrete_k_means_clustering() {
     let mut discrete =
         Discrete::kmeans(&square_grid()).expect("Creating discrete should not fail.");
 
-    let (score, clusters) = discrete.optimal_clustering(4);
+    let (score, clusters) = &discrete.optimal_clusterings()[4];
     assert_eq!(
-        clusters, expected_clusters,
+        *clusters, expected_clusters,
         "Clusters should match expected clusters."
     );
     #[expect(clippy::float_cmp, reason = "This comparison should be exact.")]
     {
         assert_eq!(
-            score,
+            *score,
             4.0 * (1.0 + 2.0 + 1.0), // 4 clusters, with 4 points each
             "Score should exactly match expected score."
         );
@@ -127,15 +225,15 @@ fn optimal_continuous_k_means_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
     let mut kmeans = KMeans::new(&square_grid()).expect("Creating kmeans should not fail.");
 
-    let (score, clusters) = kmeans.optimal_clustering(4);
+    let (score, clusters) = &kmeans.optimal_clusterings()[4];
 
     assert_eq!(
-        clusters, expected_clusters,
+        *clusters, expected_clusters,
         "Clusters should match expected clusters."
     );
     let expected_score = 8.0; // 4 * (4/2)
     assert!(
-        (score - expected_score).abs() < 1e-12,
+        (*score - expected_score).abs() < 1e-12,
         "Score should be close to the expected score"
     );
 }
@@ -231,28 +329,69 @@ fn suboptimal_discrete_k_median_hierarchy() {
 
     assert!(
         (score - (1.0 + 3.0_f64.sqrt()) / 2.0).abs() <= 1e-3,
-        "Score should be close to 1.366."
+        "Score {score} should be close to 1.366."
     );
+}
+
+#[test]
+fn negative_weighted_instances() {
+    #[expect(
+        unused_results,
+        reason = "We only care about the weights being accepted, not the results."
+    )]
+    for nonnegatively_weighted_point in [(1.0, array![0.0]), (1e100, array![0.0])] {
+        let extended = [nonnegatively_weighted_point];
+        Discrete::weighted_kmedian(&extended).expect("These weights should be accepted");
+        Discrete::weighted_kmeans(&extended).expect("These weights should be accepted");
+        WeightedKMeans::new(&extended).expect("These weights should be accepted");
+    }
+
+    for negatively_weighted_point in [
+        (-1.0, array![0.0]),
+        (-0.0, array![0.0]),
+        (0.0, array![0.0]),
+        (f64::NAN, array![0.0]),
+        (f64::INFINITY, array![0.0]),
+        (f64::NEG_INFINITY, array![0.0]),
+    ] {
+        let extended = [
+            (1.0, array![0.0]),
+            negatively_weighted_point,
+            (1.0, array![0.0]),
+        ];
+        assert_eq!(
+            Discrete::weighted_kmedian(&extended),
+            Err(Error::BadWeight(1))
+        );
+        assert_eq!(
+            Discrete::weighted_kmeans(&extended),
+            Err(Error::BadWeight(1))
+        );
+        assert_eq!(WeightedKMeans::new(&extended), Err(Error::BadWeight(1)));
+    }
 }
 
 #[test]
 fn empty_instances() {
     assert_eq!(Discrete::kmedian(&[]), Err(Error::EmptyPoints));
     assert_eq!(Discrete::kmeans(&[]), Err(Error::EmptyPoints));
+    assert_eq!(Discrete::weighted_kmedian(&[]), Err(Error::EmptyPoints));
+    assert_eq!(Discrete::weighted_kmeans(&[]), Err(Error::EmptyPoints));
     assert_eq!(KMeans::new(&[]), Err(Error::EmptyPoints));
+    assert_eq!(WeightedKMeans::new(&[]), Err(Error::EmptyPoints));
 }
 
 #[test]
 #[expect(clippy::float_cmp, reason = "This should be exact.")]
 fn singleton_instances() {
-    fn correct_clustering<C: Cost>(problem: &mut C) {
+    fn correct_clustering<C: Cost>(maybe_problem: Result<C, Error>) {
+        let mut problem = maybe_problem.expect("Creating problem should not fail.");
         assert_eq!(problem.num_points(), 1);
 
-        let approximate = problem.approximate_clustering(1);
-        assert_eq!(approximate.0, 0.0);
+        let (score, clusters) = &problem.approximate_clusterings()[1];
+        assert_eq!(*score, 0.0);
         assert_eq!(
-            approximate
-                .1
+            clusters
                 .iter()
                 .map(|x| x.iter().collect_vec())
                 .collect_vec(),
@@ -260,17 +399,19 @@ fn singleton_instances() {
         );
     }
 
-    let high_dimensional_singleton = vec![Array1::from_iter((0..256).map(f64::from))];
-    let mut singleton_discrete_kmedian =
-        Discrete::kmedian(&high_dimensional_singleton).expect("Creating discrete should not fail.");
-    let mut singleton_discrete_kmeans =
-        Discrete::kmeans(&high_dimensional_singleton).expect("Creating discrete should not fail.");
-    let mut singleton_continuous_kmeans =
-        KMeans::new(&high_dimensional_singleton).expect("Creating kmeans should not fail.");
+    let high_dimensional_singleton = [Array1::from_iter((0..256).map(f64::from))];
+    let high_dimensional_weighted_singleton = [(1.0, Array1::from_iter((0..256).map(f64::from)))];
 
-    correct_clustering(&mut singleton_discrete_kmedian);
-    correct_clustering(&mut singleton_discrete_kmeans);
-    correct_clustering(&mut singleton_continuous_kmeans);
+    correct_clustering(Discrete::kmedian(&high_dimensional_singleton));
+    correct_clustering(Discrete::kmeans(&high_dimensional_singleton));
+    correct_clustering(Discrete::weighted_kmedian(
+        &high_dimensional_weighted_singleton,
+    ));
+    correct_clustering(Discrete::weighted_kmeans(
+        &high_dimensional_weighted_singleton,
+    ));
+    correct_clustering(KMeans::new(&high_dimensional_singleton));
+    correct_clustering(WeightedKMeans::new(&high_dimensional_weighted_singleton));
 }
 
 #[test]

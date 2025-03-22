@@ -31,9 +31,7 @@ pub fn optimal_clustering(c: &mut Criterion) {
         &format!("4×4 grid, discrete k-median, opt for k=1..={}", grid.len()),
         |b| {
             b.iter(|| {
-                (1..=grid.len()).for_each(|k| {
-                    black_box(Discrete::kmedian(&grid).unwrap()).optimal_clustering(k);
-                });
+                black_box(Discrete::kmedian(&grid).unwrap()).optimal_clusterings();
             });
         },
     );
@@ -41,9 +39,7 @@ pub fn optimal_clustering(c: &mut Criterion) {
         &format!("4×4 grid, continuous k-means, opt for k=1..={}", grid.len()),
         |b| {
             b.iter(|| {
-                (1..=grid.len()).for_each(|k| {
-                    black_box(KMeans::new(&grid).unwrap()).optimal_clustering(k);
-                });
+                black_box(KMeans::new(&grid).unwrap()).optimal_clusterings();
             });
         },
     );
@@ -70,7 +66,7 @@ pub fn hierarchies(c: &mut Criterion) {
 
 criterion_group!(
     name = benches;
-    config = Criterion::default().sample_size(10);
+    config = Criterion::default().sample_size(16);
     targets = optimal_clustering, hierarchies
 );
 criterion_main!(benches);

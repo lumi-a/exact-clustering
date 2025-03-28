@@ -103,6 +103,16 @@ impl Cluster {
         self.0 |= point;
     }
 
+    /// Remove a point from the cluster.
+    fn remove(&mut self, point_ix: usize) {
+        let point = 1 << point_ix;
+        debug_assert!(
+            (point & self.0) != 0,
+            "Throughout the entire implementation, we should never remove a non-existing point."
+        );
+        self.0 &= !point;
+    }
+
     /// Check whether the set contains a point-index.
     #[must_use]
     #[inline]
@@ -295,6 +305,67 @@ impl ClusteringNodeMergeMultiple {
             }));
         }
         nodes
+    }
+
+    /// Change `self` to be locally optimal, i.e.: For every point, try moving that point
+    /// to a different cluster and check if it decreases the cost, repeating this until moving points
+    /// no longer decreases the cost.
+    fn optimise_locally<C: Cost + ?Sized>(&mut self, data: &mut C) {
+        let mut found_improvement = || {
+            for source_cluster_ix in 0..self.clusters.len() {
+                let source_cluster = self.clusters[source_cluster_ix];
+                for point_ix in source_cluster.iter() {
+                    let mut updated_source_cluster = source_cluster;
+                    updated_source_cluster.remove(point_ix);
+                    let source_costdelta =
+                        data.cost(updated_source_cluster) - data.cost(source_cluster);
+
+                    for target_cluster_ix in
+                        (0..self.clusters.len()).filter(|ix| *ix != source_cluster_ix)
+                    {
+                        let target_cluster = self.clusters[target_cluster_ix];
+
+                        let mut updated_target_cluster = target_cluster;
+                        updated_target_cluster.insert(point_ix);
+                        let costdelta = source_costdelta + data.cost(updated_target_cluster)
+                            - data.cost(target_cluster);
+                        if costdelta < 0.0 {
+                            // Keep the clusters in order:
+                            if updated_source_cluster.cmp(&updated_target_cluster)
+                                == source_cluster_ix.cmp(&target_cluster_ix)
+                            {
+                                self.clusters[source_cluster_ix] = updated_source_cluster;
+                                self.clusters[target_cluster_ix] = updated_target_cluster;
+                            } else {
+                                self.clusters[source_cluster_ix] = updated_target_cluster;
+                                self.clusters[target_cluster_ix] = updated_source_cluster;
+                            }
+
+                            self.cost += costdelta;
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        };
+
+        while found_improvement() {}
+
+        self.clusters.sort();
+
+        debug_assert!(
+            {
+                (0..data.num_points()).all(|point_ix| {
+                    self.clusters
+                        .iter()
+                        .filter(|cluster| cluster.contains(point_ix))
+                        .count()
+                        == 1
+                })
+            },
+            "The clusters should always cover every point exactly once."
+        );
     }
 
     /// Create a new node with `num_points` singleton-clusters.
@@ -492,7 +563,29 @@ pub trait Cost {
     /// Here, `vec[0]` can have an arbitrary score (usually `0.0`) and arbitrary clustering (usually empty).
     #[inline]
     fn approximate_clusterings(&mut self) -> Vec<(f64, Clustering)> {
-        self.greedy_hierarchy()
+        // This is similar to `greedy_hierarchy`, but with local search after each merge.
+        // TODO: Can we reduce code-duplication here?
+        let num_points = self.num_points();
+
+        let mut clustering = ClusteringNodeMergeMultiple::new_singletons(num_points);
+        let mut solution: Vec<(f64, Clustering)> =
+            vec![(0.0, clustering.clone().into_clustering())];
+
+        while clustering.clusters.len() > 1 {
+            let mut best_merge = clustering
+                .get_all_merges(self)
+                .into_iter()
+                .min_by(|a, b| a.cost.total_cmp(&b.cost))
+                .expect("There should always be a possible merge");
+            best_merge.optimise_locally(self);
+
+            solution.push((best_merge.cost, best_merge.clone().into_clustering()));
+            clustering = best_merge;
+        }
+
+        solution.push((0.0, Clustering::default()));
+        solution.reverse();
+        solution
     }
 
     /// Return the cost of a cluster. This can be memoized via data in `self`.
@@ -1034,6 +1127,10 @@ impl Cost for WeightedKMeans {
 }
 impl WeightedKMeans {
     /// Return a new `k`-means clustering instance from a given vector of points.
+    ///
+    /// TODO: For all weighted functions, it'd be great to sort the weighted points by weight first,
+    /// algorithms run significantly faster then. Afterwards, rework the
+    /// `get_high_kmeans_price_of_greedy_instance` integration-test-function to not sort the points on its own.
     #[inline]
     pub fn new(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;

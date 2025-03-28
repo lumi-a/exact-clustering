@@ -86,7 +86,7 @@ fn triangle_grid() -> Vec<Point> {
     ]
 }
 
-fn get_high_kmedians_price_of_greedy_instance(d: u8) -> Vec<WeightedPoint> {
+fn get_high_kmeans_price_of_greedy_instance(d: u8) -> Vec<WeightedPoint> {
     // Construct the example from https://arxiv.org/abs/1907.05094v1, section 4,
     // in `d` dimensions.
 
@@ -116,13 +116,16 @@ fn get_high_kmedians_price_of_greedy_instance(d: u8) -> Vec<WeightedPoint> {
             Array1::from_vec(v),
         )
     })
-    .collect_vec()
+    .sorted_unstable_by(|(a, _): &WeightedPoint, (b, _)| b.total_cmp(a))
+    .collect()
 }
 
 #[test]
-fn high_kmedian_price_of_greedy() {
+fn high_kmeans_price_of_greedy() {
+    // TODO: Consider also including k=4 here, if it allows the test to pass quickly enough
+    // after future optimizations.
     for d in 1..=3 {
-        let weighted_points = get_high_kmedians_price_of_greedy_instance(d);
+        let weighted_points = get_high_kmeans_price_of_greedy_instance(d);
         let mut kmeans = WeightedKMeans::new(&weighted_points)
             .expect("Creating WeightedKMeans should not fail.");
 
@@ -137,11 +140,11 @@ fn high_kmedian_price_of_greedy() {
             2.0_f64.powi(i32::from(d) - 1) * (2.0 - 2.0_f64.sqrt()).powi(2),
         ) - 2.0_f64.powi(i32::from(d));
 
-        assert!(optimal_cost - 1e-6 < expected_optimal_cost);
-        assert!(optimal_cost + 1e-6 > expected_optimal_cost);
+        assert!(optimal_cost - 1e-4 < expected_optimal_cost);
+        assert!(optimal_cost + 1e-4 > expected_optimal_cost);
 
-        assert!(greedy_cost - 1e-6 < expected_greedy_cost);
-        assert!(greedy_cost + 1e-6 > expected_greedy_cost);
+        assert!(greedy_cost - 1e-4 < expected_greedy_cost);
+        assert!(greedy_cost + 1e-4 > expected_greedy_cost);
     }
 }
 

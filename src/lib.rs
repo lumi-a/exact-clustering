@@ -784,6 +784,9 @@ pub trait Cost {
     fn price_of_greedy(&mut self) -> (f64, Vec<Clustering>) {
         let mut max_ratio = MaxRatio::zero();
         let greedy_hierarchy = self.greedy_hierarchy();
+        // TODO: Calculation of optimal_clusterings can be sped up by feeding the
+        // greedy-hierarchy into it as a starting-point, perhaps? Though currently approximate-clusterings
+        // uses a better local-search algorithm.
         let opt_for_fixed_k: Vec<f64> = self
             .optimal_clusterings()
             .into_iter()
@@ -877,6 +880,8 @@ impl Discrete {
     }
 }
 impl Cost for Discrete {
+    // TODO: Could we achieve a faster optimal-clusterings-impl for Discrete
+    // by not searching for clusterings but for centroids?
     #[inline]
     fn num_points(&self) -> usize {
         self.distances.len()

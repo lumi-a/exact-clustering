@@ -969,15 +969,15 @@ impl fmt::Display for Error {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let msg = &match self {
-            Self::EmptyPoints => "No points were supplied.".to_owned(),
-            Self::TooManyPoints(pointcount) => format!(
-                "Can cluster at most {MAX_POINT_COUNT} points, but {pointcount} were supplied."
-            ),
+            Self::EmptyPoints => "no points supplied".to_owned(),
+            Self::TooManyPoints(pointcount) => {
+                format!("can cluster at most {MAX_POINT_COUNT} points, but got {pointcount}")
+            }
             Self::ShapeMismatch(ix1, ix2) => {
-                format!("Points {ix1} and {ix2} have different dimensions.",)
+                format!("points {ix1} and {ix2} have different dimensions",)
             }
             Self::BadWeight(ix) => {
-                format!("Point {ix} doesn't have a finite and positive weight.",)
+                format!("point {ix} doesn't have a finite and positive weight",)
             }
         };
         f.write_str(msg)

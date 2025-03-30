@@ -8,6 +8,7 @@ repository = "https://github.com/lumi-a/exact-clustering"
 keywords = ["clustering", "k-means", "k-median", "optimization", "algorithms"]
 categories = ["algorithms", "science"]
 readme = "README.md"
+authors = ["lumi-a"]
 
 [dependencies]
 clustering = "0.2.1"

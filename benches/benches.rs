@@ -1,4 +1,4 @@
-//! Benchmarks for the `price_of_hierarchy` crate.
+//! Benchmarks for the `exact_clustering` crate.
 
 #![allow(
     unused_results,
@@ -12,8 +12,8 @@
 #![allow(clippy::missing_panics_doc, reason = "Benchmarks should not panic.")]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use exact_clustering::{Cost as _, Discrete, KMeans, Point};
 use ndarray::prelude::*;
-use price_of_hierarchy::{Cost as _, Discrete, KMeans, Point};
 
 /// Create a 2d-grid of `width`×`height` points.
 fn grid(width: u32, height: u32) -> Vec<Point> {

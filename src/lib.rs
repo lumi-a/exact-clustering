@@ -17,8 +17,8 @@
 //!
 //! ```
 //! use ndarray::prelude::*;
-//! use price_of_hierarchy::{Cost as _, Discrete, KMeans};
 //! use std::collections::BTreeSet;
+//! use exact_clustering::{Cost as _, Discrete, KMeans};
 //!
 //! // Set of 2d-points looking like ⠥
 //! // This has a uniqe optimal 2-clustering for all three problems.
@@ -232,16 +232,15 @@ struct ClusteringNodeMergeMultiple {
     /// must remain sorted so that two Nodes with the same clusters are recognised as
     /// equal.
     ///
-    /// We could also use some set (`OrderSet`, `BTreeSet`) datastructure,
-    /// as long as it implements `Hash`.
-    ///
-    /// TODO: Benchmark those three datastructures, and also benchmark the smallvec-size.
+    /// TODO: Once [`generic_const_exprs`](https://github.com/rust-lang/rust/issues/76560) is stable,
+    /// try using an array with dynamic dispatch instead. Consider hiding this behind a feature-gate
+    /// to reduce compile-times.
     clusters: SmallVec<[Cluster; 6]>,
     /// The total cost of the clustering. We keep track of this to efficiently recalculate
     /// costs after merging.
     ///
-    /// TODO: Try not keeping track of it, instead having [`ClusteringNodeMergeMultiple::get_all_merges`] return a delta,
-    /// and using that delta in Dijkstra.
+    /// TODO: Try not keeping track of it, instead having [`ClusteringNodeMergeMultiple::get_all_merges`]
+    /// return a delta, and using that delta in Dijkstra.
     cost: f64,
 }
 // Only consider `clusters` in equality-checks, costs should be near-equal anyway.
@@ -288,6 +287,9 @@ impl ClusteringNodeMergeMultiple {
             // Index `i` is gone now, so the lower bound is still `i`
             nodes.extend((i..clusters_minus_i.len()).map(|j| {
                 let mut new_clusters = clusters_minus_i.clone();
+                // SAFETY:
+                // `j` is less than `clusters_minus_i.len()`, and `new_clusters` is a clone of
+                // `clusters_minus_i`, so it's a valid index.
                 let cluster_j = unsafe { new_clusters.get_unchecked_mut(j) };
                 let mut new_cost = cost_minus_i - data.cost(*cluster_j);
                 cluster_j.union_with(cluster_i);
@@ -312,9 +314,13 @@ impl ClusteringNodeMergeMultiple {
     /// no longer decreases the cost.
     fn optimise_locally<C: Cost + ?Sized>(&mut self, data: &mut C) {
         let mut found_improvement = || {
+            #[expect(
+                clippy::indexing_slicing,
+                reason = "These are safe, we just use indices to avoid borrow-issues."
+            )]
             for source_cluster_ix in 0..self.clusters.len() {
                 let source_cluster = self.clusters[source_cluster_ix];
-                for point_ix in source_cluster.iter() {
+                for point_ix in source_cluster {
                     let mut updated_source_cluster = source_cluster;
                     updated_source_cluster.remove(point_ix);
                     let source_costdelta =
@@ -398,6 +404,10 @@ impl ClusteringNodeMergeMultiple {
 struct ClusteringNodeMergeSingle {
     /// The nonempty clusters already created. May include singletons.
     /// Will always contain at most `k` clusters.
+    ///
+    /// TODO: Once [`generic_const_exprs`](https://github.com/rust-lang/rust/issues/76560) is stable,
+    /// try using an array with dynamic dispatch instead. Consider hiding this behind a feature-gate
+    /// to reduce compile-times.
     clusters: SmallVec<[Cluster; 6]>,
     /// The cost of the clustering represented by [`Self::clusters`]. This should
     /// always be nearly-equal to [`Cost::total_cost`] of [`Self::clusters`].
@@ -408,7 +418,7 @@ struct ClusteringNodeMergeSingle {
     /// - It ensures we enumerate the clusterings less redundantly
     ///
     /// TODO: Try not storing this, but instead doing best-first-search level-wise?
-    /// We should also use the significantly smaller u8 here.
+    /// We could also use the significantly smaller u8 here.
     next_to_add: usize,
 }
 impl PartialEq for ClusteringNodeMergeSingle {
@@ -449,6 +459,9 @@ impl ClusteringNodeMergeSingle {
         (0..self.clusters.len())
             .map(|cluster_ix| {
                 let mut new_clustering_node = self.clone();
+                // SAFETY:
+                // `cluster_ix` is less than `self.clusters.len()`, and `new_clustering_node.clusters` is
+                // a clone of `self.clusters`, so `cluster_ix` is in bounds.
                 let cluster_to_edit =
                     unsafe { new_clustering_node.clusters.get_unchecked_mut(cluster_ix) };
                 new_clustering_node.cost -= data.cost(*cluster_to_edit);
@@ -550,6 +563,8 @@ impl Zero for MaxRatio {
 type Costs = FxHashMap<Cluster, f64>;
 
 /// A trait for cost-functions for a class of clustering-problems.
+///
+/// TODO: Specify contract for trait-implementors.
 pub trait Cost {
     /// Return the total number of points that must be clustered.
     /// This must never exceed [`MAX_POINT_COUNT`].
@@ -590,7 +605,8 @@ pub trait Cost {
 
     /// Return the cost of a cluster. This can be memoized via data in `self`.
     ///
-    /// The `cluster` will never contain an index higher than `self.num_points()-1`.
+    /// The `cluster` will never contain an index higher than `self.num_points()-1` and will
+    /// never be empty.
     fn cost(&mut self, cluster: Cluster) -> f64;
 
     /// Return the total cost of a clustering.
@@ -599,7 +615,7 @@ pub trait Cost {
         clustering.iter().map(|cluster| self.cost(*cluster)).sum()
     }
 
-    /// Return an optimal `k`-clustering for every `0 <= k <= self.num_points()`.
+    /// Return an optimal `k`-clustering for every `0 ≤ k ≤ self.num_points()`.
     ///
     /// For the returned vector, `vec[k]` must be a tuple containing the optimal clustering
     /// for level `k`, along with the [`total_cost`](Cost::total_cost) of that clustering.
@@ -609,6 +625,8 @@ pub trait Cost {
         let num_points = self.num_points();
         let mut results = Vec::with_capacity(num_points);
 
+        // TODO: Could we instead use some good A* heuristic? Then ordering the points by weight might also
+        // be redundant.
         for (k, (approximate_cost, approximate_clustering)) in
             self.approximate_clusterings().into_iter().enumerate()
         {
@@ -679,14 +697,20 @@ pub trait Cost {
         let mut min_hierarchy_price = MaxRatio(price_of_greedy);
         let initial_clustering = ClusteringNodeMergeMultiple::new_singletons(num_points);
         // TODO: If we ever decide to inline dijkstra, we should also have a workhorse-variable for collecting the
-        // get_all_merges results, unless inlining dijkstra makes allocations entirely obsolete due to inlined iterators.
-        // TODO: If we ever decide to inline dijkstra, consider only retaining those nodes
-        // whose cost is below `min_hierarchy_price` after updating `min_hierarchy_price`.
+        // get_all_merges results, unless inlining dijkstra makes allocations entirely obsolete due to inline
+        // iterators.
+        // TODO: If we ever decide to inline dijkstra, benchmark running `retain` on all nodes, discarding those
+        // whose cost is below the new `min_hierarchy_price`.
+        // TODO: Could we instead use some good A* heuristic? Then ordering the points by weight might also
+        // be redundant.
         dijkstra(
             &initial_clustering,
             |clustering| {
                 let opt_cost =
-                    *unsafe { opt_for_fixed_k.get_unchecked(clustering.clusters.len() - 1) };
+                    // SAFETY:
+                    // We'll never have more than `num_points` clusters, and `opt_for_fixed_k` can index
+                    // up to `num_points`.
+                    *unsafe { opt_for_fixed_k.get_unchecked(clustering.clusters.len()) };
                 clustering
                     .get_all_merges(self)
                     .into_iter()
@@ -768,8 +792,10 @@ pub trait Cost {
 
         // Skip the first (empty) level
         for (cost, clustering) in greedy_hierarchy.iter().skip(1) {
-            let opt_cost = opt_for_fixed_k[clustering.len()];
-            let ratio = MaxRatio::new(*cost, opt_cost);
+            let opt_cost = opt_for_fixed_k
+                .get(clustering.len())
+                .expect("opt_for_fixed_k should have an entry for this number of clusters.");
+            let ratio = MaxRatio::new(*cost, *opt_cost);
             max_ratio = max_ratio + ratio;
         }
 
@@ -862,9 +888,16 @@ impl Cost for Discrete {
                 .iter()
                 .map(|center_candidate_ix| {
                     let center_candidate_row =
+                        // SAFETY:
+                        // [`Cost::cost`] promises that `cluster` will never contain an index
+                        // higher than `self.num_points()-1`. Because `self.num_points()` is
+                        // the length of `self.distances`, this bound is safe.
                         unsafe { self.distances.get_unchecked(center_candidate_ix) };
                     cluster
                         .iter()
+                        // SAFETY:
+                        // Similar to the above safety-comment, and noting that `center_candidate_row`
+                        // has length `self.num_points()`, as well.
                         .map(|ix| *unsafe { center_candidate_row.get_unchecked(ix) })
                         .sum()
                 })
@@ -1023,18 +1056,26 @@ impl Cost for KMeans {
     #[inline]
     fn cost(&mut self, cluster: Cluster) -> f64 {
         *self.costs.entry(cluster).or_insert_with(|| {
-            let mut center = Array1::zeros(self.points[0].raw_dim());
+            let first_point_dimensions =
+                // SAFETY:
+                // [`verify_points`] ensures that we always have at least one point.
+                unsafe { self.points.first().unwrap_unchecked() }.raw_dim();
+            let mut center = Array1::zeros(first_point_dimensions);
 
             // For some reason, this is 30% faster than a for-loop.
             cluster
                 .iter()
+                // SAFETY:
+                // [`Cost::cost`] promises us that this index is in-bounds.
                 .for_each(|i| center += unsafe { self.points.get_unchecked(i) });
 
-            // TODO: Check we don't divide by 0
+            // We never divide by 0 here.
             center /= f64::from(cluster.len());
             cluster
                 .iter()
                 .map(|i| {
+                    // SAFETY:
+                    // [`Cost::cost`] promises us that this index is in-bounds.
                     let p = unsafe { self.points.get_unchecked(i) };
                     (p - &center).map(|x| x.powi(2)).sum()
                 })
@@ -1046,7 +1087,7 @@ impl Cost for KMeans {
         use clustering::kmeans;
         let mut results = Vec::with_capacity(self.num_points() + 1);
         results.push((0.0, Clustering::default()));
-        let max_iter = 1000; // TODO: Benchmark this? Maybe there's some way to print the number of iterations
+        let max_iter = 1000;
         let samples: Vec<Vec<f64>> = self
             .points
             .iter()
@@ -1102,22 +1143,31 @@ impl Cost for WeightedKMeans {
     fn cost(&mut self, cluster: Cluster) -> f64 {
         *self.costs.entry(cluster).or_insert_with(|| {
             let mut total_weight = 0.0;
-            let mut center: Array1<f64> = Array1::zeros(self.weighted_points[0].1.raw_dim());
+            let first_point_dimensions =
+                // SAFETY:
+                // [`verify_points`] ensures that we always have at least one point.
+                unsafe { self.weighted_points.first().unwrap_unchecked() }.1.raw_dim();
+            let mut center: Array1<f64> = Array1::zeros(first_point_dimensions);
 
             // For some reason, this is 30% faster than a for-loop.
             // TODO: If this is hot, benchmark changes in assignments (e.g. assign let weight = weighted_point.0 first)
             cluster.iter().for_each(|i| {
+                // SAFETY:
+                // [`Cost::cost`] promises us that this index is in-bounds.
                 let weighted_point = unsafe { self.weighted_points.get_unchecked(i) };
                 total_weight += weighted_point.0;
                 center += &(&weighted_point.1 * weighted_point.0);
             });
 
-            // TODO: Check we don't divide by 0
+            // Because `cluster` is never empty, and weights are always positive,
+            // we never divide by 0 here.
             center /= total_weight;
 
             cluster
                 .iter()
                 .map(|i| {
+                    // SAFETY:
+                    // [`Cost::cost`] promises us that this index is in-bounds.
                     let weighted_point = unsafe { self.weighted_points.get_unchecked(i) };
                     weighted_point.0 * (&weighted_point.1 - &center).map(|x| x.powi(2)).sum()
                 })
@@ -1128,9 +1178,11 @@ impl Cost for WeightedKMeans {
 impl WeightedKMeans {
     /// Return a new `k`-means clustering instance from a given vector of points.
     ///
-    /// TODO: For all weighted functions, it'd be great to sort the weighted points by weight first,
-    /// algorithms run significantly faster then. Afterwards, rework the
-    /// `get_high_kmeans_price_of_greedy_instance` integration-test-function to not sort the points on its own.
+    /// The algorithm runs significantly faster if you sort the points by weight first.
+    ///
+    /// TODO: Do so internally instead of at callsite. This probably requires better return-values
+    /// in the API. Afterwards, rework the `get_high_kmeans_price_of_greedy_instance` function in
+    /// integration-tests to not sort the points on its own.
     #[inline]
     pub fn new(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
@@ -1141,7 +1193,10 @@ impl WeightedKMeans {
     }
 }
 
-/// TODO: This method should not exist, maybe we can offer a better api for returned cluster-indices.
+/// Return a cluster from an iterator of point-indices.
+///
+/// TODO: This method only exists due to a malnourished API. An API-improvement should make
+/// it obsolete.
 #[inline]
 pub fn cluster_from_iterator<I: IntoIterator<Item = usize>>(it: I) -> Cluster {
     let mut cluster = Cluster::empty();

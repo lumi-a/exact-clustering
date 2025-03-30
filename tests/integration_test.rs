@@ -10,9 +10,9 @@
 
 use core::iter;
 
+use exact_clustering::*;
 use itertools::Itertools as _;
 use ndarray::{array, Array1};
-use price_of_hierarchy::*;
 
 fn clustering_from_iterators<I, J>(it: I) -> Clustering
 where
@@ -310,12 +310,16 @@ fn suboptimal_discrete_k_median_hierarchy() {
     assert_eq!(discrete.num_points(), points.len());
     let (score, hierarchy) = discrete.price_of_hierarchy();
     assert_eq!(hierarchy.len(), points.len() + 1);
+    assert!(
+        (score - (1.0 + 3.0_f64.sqrt()) / 2.0).abs() <= 1e-3,
+        "Score {score} should be close to 1.366."
+    );
 
     let expected_hierarchy: Vec<Clustering> = [
         vec![],
         vec![0..=5],
-        vec![0..=2, 3..=5],
-        vec![0..=2, 3..=3, 4..=5],
+        vec![0..=3, 4..=5],
+        vec![0..=1, 2..=3, 4..=5],
         vec![0..=1, 2..=2, 3..=3, 4..=5],
         vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5],
         vec![0..=0, 1..=1, 2..=2, 3..=3, 4..=4, 5..=5],
@@ -329,11 +333,6 @@ fn suboptimal_discrete_k_median_hierarchy() {
             "Hierarchy-level should match expected hierarchy-level."
         );
     }
-
-    assert!(
-        (score - (1.0 + 3.0_f64.sqrt()) / 2.0).abs() <= 1e-3,
-        "Score {score} should be close to 1.366."
-    );
 }
 
 #[test]

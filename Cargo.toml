@@ -1,10 +1,10 @@
 [package]
-name = "price_of_hierarchy"
+name = "exact-clustering"
 version = "0.1.0"
 edition = "2021"
 description = "Find optimal clusterings and optimal hierarchical clusterings."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/lumi-a/clustering"
+repository = "https://github.com/lumi-a/exact-clustering"
 keywords = ["clustering", "k-means", "k-median", "optimization", "algorithms"]
 categories = ["algorithms", "science"]
 readme = "README.md"

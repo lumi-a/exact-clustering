@@ -206,6 +206,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "exact-clustering"
+version = "0.1.0"
+dependencies = [
+ "clustering",
+ "criterion",
+ "itertools 0.14.0",
+ "ndarray",
+ "pathfinding",
+ "rustc-hash",
+ "smallvec",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -448,19 +461,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
  "zerocopy",
-]
-
-[[package]]
-name = "price_of_hierarchy"
-version = "0.1.0"
-dependencies = [
- "clustering",
- "criterion",
- "itertools 0.14.0",
- "ndarray",
- "pathfinding",
- "rustc-hash",
- "smallvec",
 ]
 
 [[package]]

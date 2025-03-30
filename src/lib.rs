@@ -968,7 +968,7 @@ pub enum Error {
 impl fmt::Display for Error {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let msg = &match self {
+        let msg = match *self {
             Self::EmptyPoints => "no points supplied".to_owned(),
             Self::TooManyPoints(pointcount) => {
                 format!("can cluster at most {MAX_POINT_COUNT} points, but got {pointcount}")
@@ -980,7 +980,7 @@ impl fmt::Display for Error {
                 format!("point {ix} doesn't have a finite and positive weight",)
             }
         };
-        f.write_str(msg)
+        f.write_str(&msg)
     }
 }
 

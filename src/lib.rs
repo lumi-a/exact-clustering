@@ -80,11 +80,11 @@ pub type Storage = u32;
 pub const MAX_POINT_COUNT: usize = Storage::BITS as usize;
 
 /// A compact representation of a cluster of points, using a bitset.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Cluster(Storage);
 impl Cluster {
     /// Create a new empty cluster containing no points.
-    const fn empty() -> Self {
+    const fn new() -> Self {
         Self(0)
     }
 
@@ -152,7 +152,7 @@ impl Cluster {
 }
 
 /// An iterator over the points in a cluster.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClusterIter(Storage);
 impl Iterator for ClusterIter {
     type Item = usize;
@@ -812,7 +812,7 @@ pub trait Cost {
 /// The cost is supplied using a distance-function between points. The cost of a cluster, given a center,
 /// is the sum of the distances between the center and all points in the cluster. The cost of a cluster
 /// will always be calculated by choosing the center yielding the smallest cost.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Discrete {
     /// The distances between the points.
     distances: Distances,
@@ -1046,7 +1046,7 @@ fn verify_weighted_points(weighted_points: &[WeightedPoint]) -> Result<&[Weighte
 /// the center and all points in the cluster.
 /// The center is automatically calculated to minimise the cost, which turns out to simply be the
 /// average of all point-positions in the cluster.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct KMeans {
     /// The points to be clustered.
     points: Vec<Point>,
@@ -1100,7 +1100,7 @@ impl Cost for KMeans {
             .collect();
         results.extend((1..=self.num_points()).map(|k| {
             let kmeans_clustering = kmeans(k, &samples, max_iter);
-            let mut clusters = vec![Cluster::empty(); k];
+            let mut clusters = vec![Cluster::new(); k];
             for (point_ix, cluster_ix) in kmeans_clustering.membership.iter().enumerate() {
                 clusters
                     .get_mut(*cluster_ix)
@@ -1132,7 +1132,7 @@ impl KMeans {
 /// the center and each point in the cluster, multiplied by the point's weight.
 /// The center is automatically calculated to minimise the cost, which turns out to simply be the
 /// weighted average of all point-positions in the cluster.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct WeightedKMeans {
     /// The points to be clustered.
     weighted_points: Vec<WeightedPoint>,
@@ -1204,7 +1204,7 @@ impl WeightedKMeans {
 /// it obsolete.
 #[inline]
 pub fn cluster_from_iterator<I: IntoIterator<Item = usize>>(it: I) -> Cluster {
-    let mut cluster = Cluster::empty();
+    let mut cluster = Cluster::new();
     for i in it {
         cluster.insert(i);
     }
@@ -1270,8 +1270,8 @@ mod tests {
                 );
             }
         }
-        let mut cluster_div_3 = Cluster::empty();
-        let mut cluster_div_5 = Cluster::empty();
+        let mut cluster_div_3 = Cluster::new();
+        let mut cluster_div_5 = Cluster::new();
         assert!(cluster_div_3.is_empty());
         assert!(cluster_div_5.is_empty());
         // Only go up to 14, we don't want any intersections between the two.

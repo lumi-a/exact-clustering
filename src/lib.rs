@@ -125,21 +125,21 @@ impl Cluster {
         (self.0 & (1 << point_ix)) != 0
     }
 
-    /// Return the number of points in the cluster.
+    /// Count the number of points in the cluster.
     #[must_use]
     #[inline]
     pub const fn len(self) -> Storage {
         self.0.count_ones()
     }
 
-    /// Return whether the cluster contains no points.
+    /// Check whether the cluster doesn't contain any points.
     #[must_use]
     #[inline]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// Return an iterator over the point-indices in the cluster.
+    /// Construct an iterator over the point-indices in the cluster.
     #[inline]
     #[must_use]
     pub const fn iter(self) -> ClusterIter {
@@ -156,7 +156,7 @@ impl Cluster {
     }
 }
 
-/// An iterator over the points in a cluster.
+/// An iterator over the point-indices in a cluster.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ClusterIter(Storage);
 impl Iterator for ClusterIter {
@@ -222,18 +222,24 @@ impl fmt::Display for Cluster {
 /// A partition of a set of points into disjoint clusters.
 pub type Clustering = FxHashSet<Cluster>;
 
-/// Entry `Distances[i][j]` corresponds to the distance between points `i` and `j`.
+/// A distance-matrix between pairs of points.
+///
+/// The distance between the points with indices `i` and `j` is `Distances[i][j]`.
 type Distances = Vec<Vec<f64>>;
 
 /// A single point.
 pub type Point = Array1<f64>;
-/// A weighted point. The distance between two weighted points `d((w0, p0), (w1, p1))` is `w1 * d(p0, p1)`.
+/// A weighted point.
+///
+/// The distance between two weighted points `d((w0, p0), (w1, p1))` is `w1 * d(p0, p1)`.
 pub type WeightedPoint = (f64, Array1<f64>);
 
 #[derive(Clone, Debug)]
-/// A helper-struct for efficiently merging clusters, used in finding optimal hierarchies.
+/// A helper-struct for efficiently merging clusters, used for finding optimal hierarchies.
 struct ClusteringNodeMergeMultiple {
-    /// The clusters. We use a [`SmallVec`] because this will allocate frequently. The smallvec
+    /// The current clusters.
+    ///
+    /// We use a [`SmallVec`] because this will allocate frequently. The smallvec
     /// must remain sorted so that two Nodes with the same clusters are recognised as
     /// equal.
     ///
@@ -241,8 +247,9 @@ struct ClusteringNodeMergeMultiple {
     /// try using an array with dynamic dispatch instead. Consider hiding this behind a feature-gate
     /// to reduce compile-times.
     clusters: SmallVec<[Cluster; 6]>,
-    /// The total cost of the clustering. We keep track of this to efficiently recalculate
-    /// costs after merging.
+    /// The total cost of the clustering.
+    ///
+    /// We keep track of this to efficiently recalculate costs after merging.
     ///
     /// TODO: Try not keeping track of it, instead having [`ClusteringNodeMergeMultiple::get_all_merges`]
     /// return a delta, and using that delta in Dijkstra.
@@ -261,7 +268,7 @@ impl Hash for ClusteringNodeMergeMultiple {
     }
 }
 impl ClusteringNodeMergeMultiple {
-    /// Return all possible pairs of merges of the current clusters.
+    /// Get all possible pairs of merges of the current clusters.
     ///
     /// If performance is at a premium, you can avoid the vec-allocation by inlining the loops at the
     /// callsite, but that increases code-duplication (this method is required in [`Cost::price_of_hierarchy`]
@@ -314,9 +321,10 @@ impl ClusteringNodeMergeMultiple {
         nodes
     }
 
-    /// Change `self` to be locally optimal, i.e.: For every point, try moving that point
-    /// to a different cluster and check if it decreases the cost, repeating this until moving points
-    /// no longer decreases the cost.
+    /// Change `self` to be locally optimal.
+    ///
+    /// For every point, try re-assigning that point to a different cluster and check if it decreases the
+    /// cost, repeating this until re-assigning points no longer decreases the cost.
     fn optimise_locally<C: Cost + ?Sized>(&mut self, data: &mut C) {
         let mut found_improvement = || {
             #[expect(
@@ -396,7 +404,7 @@ impl ClusteringNodeMergeMultiple {
         }
     }
 
-    /// Convert to a [`Clustering`].
+    /// Convert `self` to a [`Clustering`].
     #[inline]
     fn into_clustering(self) -> Clustering {
         self.clusters.into_iter().collect()
@@ -404,21 +412,28 @@ impl ClusteringNodeMergeMultiple {
 }
 
 #[derive(Clone, Debug)]
-/// A node in the merge-heap. Unlike [`ClusteringNodeMergeMultiple`], this only allows for
+/// A helper-struct for efficiently merging clusters, used for finding optimal clusterings.
+///
+/// Unlike [`ClusteringNodeMergeMultiple`], this only allows for
 /// merging of a cluster with a singleton-cluster.
 struct ClusteringNodeMergeSingle {
-    /// The nonempty clusters already created. May include singletons.
-    /// Will always contain at most `k` clusters.
+    /// The nonempty clusters already created.
+    ///
+    /// This may include singletons. It will always contain at most `k` clusters.
     ///
     /// TODO: Once [`generic_const_exprs`](https://github.com/rust-lang/rust/issues/76560) is stable,
     /// try using an array with dynamic dispatch instead. Consider hiding this behind a feature-gate
     /// to reduce compile-times.
     clusters: SmallVec<[Cluster; 6]>,
-    /// The cost of the clustering represented by [`Self::clusters`]. This should
-    /// always be nearly-equal to [`Cost::total_cost`] of [`Self::clusters`].
+    /// The cost of the clustering represented by [`Self::clusters`].
+    ///
+    /// This should always be nearly-equal to [`Cost::total_cost`] of [`Self::clusters`].
     cost: f64,
-    /// The next point to add. This point, and implicitly every point after it, are
-    /// singleton clusters. It's more efficient to track them this way, because
+    /// The next point to add.
+    ///
+    /// This point, and implicitly every point after it, are singleton clusters.
+    /// (TODO: This assumption means singleton clusters must have cost 0.)
+    /// It's more efficient to track them this way, because
     /// - It means we can store fewer clusters in [`Self::clusters`].
     /// - It ensures we enumerate the clusterings less redundantly
     ///
@@ -438,7 +453,7 @@ impl Hash for ClusteringNodeMergeSingle {
     }
 }
 impl Ord for ClusteringNodeMergeSingle {
-    // Order them by highest cost first
+    // Order them by highest cost first, because the BinaryHeap is a max-heap.
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         other
             .cost
@@ -452,9 +467,10 @@ impl PartialOrd for ClusteringNodeMergeSingle {
     }
 }
 impl ClusteringNodeMergeSingle {
-    /// Returns all possible next nodes from the current node by merging [`Self::next_to_add`] into
-    /// existing clusters, and creating a new singleton-cluster for it if [`Self::clusters`] has
-    /// fewer than `k` clusters.
+    /// Returns all possible next nodes from the current node.
+    ///
+    /// This merges [`Self::next_to_add`] into existing clusters, and creates a new singleton-cluster
+    /// for it if [`Self::clusters`] has fewer than `k` clusters.
     #[inline]
     fn get_next_nodes<'a, C: Cost + ?Sized>(
         &'a self,
@@ -485,7 +501,9 @@ impl ClusteringNodeMergeSingle {
             }))
     }
 
-    /// Create a new empty [`ClusteringNodeMergeSingle`], i.e. implicitly every node is in a singleton-cluster.
+    /// Create a new empty [`ClusteringNodeMergeSingle`].
+    ///
+    /// In this, every node implicitly lives in a singleton-cluster.
     fn empty() -> Self {
         Self {
             clusters: SmallVec::default(),
@@ -496,19 +514,23 @@ impl ClusteringNodeMergeSingle {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-/// A struct for tracking hierarchy-cost in Dijkstra.
+/// Tracking the hierarchy-cost in Dijkstra.
 ///
-/// The cost of a hierarchy-level is the cost of its clustering over the cost of the best-possible-clustering on that level.
+/// The cost of a hierarchy-level is the cost of its clustering over the cost of the best-possible-clustering on
+/// that level.
 /// The cost of a hierarchy is the maximum of the costs of all its levels, so addition between two [`MaxRatio`]s
 /// is the maximum of the two.
 struct MaxRatio(f64);
 impl MaxRatio {
-    /// Create a new [`MaxRatio`] from a hierarchy cost and an optimal cost.
+    /// Create a new [`MaxRatio`] from a clustering-cost and an optimal-cost.
+    ///
+    /// The clustering-cost will usually be the total cost of a level in the hierarchy,
+    /// whereas the optimal-cost will be the optimal-cost of the same level.
     #[inline]
-    fn new(hierarchy_cost: f64, opt_cost: f64) -> Self {
+    fn new(clustering_cost: f64, opt_cost: f64) -> Self {
         debug_assert!(
-            hierarchy_cost.is_finite(),
-            "hierarchy_cost {hierarchy_cost} should be finite."
+            clustering_cost.is_finite(),
+            "hierarchy_cost {clustering_cost} should be finite."
         );
         debug_assert!(
             opt_cost.is_finite(),
@@ -519,21 +541,21 @@ impl MaxRatio {
             "opt_cost {opt_cost} should be non-negative."
         );
         debug_assert!(
-            hierarchy_cost >= 0.0,
-            "hierarchy_cost {hierarchy_cost} should be non-negative"
+            clustering_cost >= 0.0,
+            "hierarchy_cost {clustering_cost} should be non-negative"
         );
         debug_assert!(
-            hierarchy_cost >= opt_cost - 1e-9,
-            "hierarchy_cost {hierarchy_cost} should be at least opt_cost {opt_cost}"
+            clustering_cost >= opt_cost - 1e-9,
+            "hierarchy_cost {clustering_cost} should be at least opt_cost {opt_cost}"
         );
         Self(if opt_cost.is_zero() {
-            if hierarchy_cost.is_zero() {
+            if clustering_cost.is_zero() {
                 1.0
             } else {
                 f64::INFINITY
             }
         } else {
-            hierarchy_cost / opt_cost
+            clustering_cost / opt_cost
         })
     }
 }
@@ -571,12 +593,22 @@ type Costs = FxHashMap<Cluster, f64>;
 ///
 /// TODO: Specify contract for trait-implementors.
 pub trait Cost {
-    /// Return the total number of points that must be clustered.
-    /// This must never exceed [`MAX_POINT_COUNT`].
-    fn num_points(&self) -> usize;
+    /// Get the cost of a cluster.
+    ///
+    /// This can be memoized via data in `self`.
+    /// The `cluster` will never contain an index higher than `self.num_points()-1` and will
+    /// never be empty.
+    fn cost(&mut self, cluster: Cluster) -> f64;
 
-    /// Quickly calculate a not-necessarily-optimal clustering, used for speeding up the search
-    /// for an optimal clustering by pruning the search-tree earlier.
+    /// Get the total cost of a clustering.
+    #[inline]
+    fn total_cost(&mut self, clustering: &Clustering) -> f64 {
+        clustering.iter().map(|cluster| self.cost(*cluster)).sum()
+    }
+
+    /// Quickly calculate a not-necessarily-optimal clustering.
+    ///
+    /// This can speed up the search for an optimal clustering by pruning the search-tree earlier.
     ///
     /// For the returned vector, `vec[k]` must be a tuple containing the approximate clustering
     /// for level `k`, along with the [`total_cost`](Cost::total_cost) of that clustering.
@@ -608,19 +640,12 @@ pub trait Cost {
         solution
     }
 
-    /// Return the cost of a cluster. This can be memoized via data in `self`.
+    /// Get the number of points that must be clustered.
     ///
-    /// The `cluster` will never contain an index higher than `self.num_points()-1` and will
-    /// never be empty.
-    fn cost(&mut self, cluster: Cluster) -> f64;
+    /// This must never exceed [`MAX_POINT_COUNT`].
+    fn num_points(&self) -> usize;
 
-    /// Return the total cost of a clustering.
-    #[inline]
-    fn total_cost(&mut self, clustering: &Clustering) -> f64 {
-        clustering.iter().map(|cluster| self.cost(*cluster)).sum()
-    }
-
-    /// Return an optimal `k`-clustering for every `0 ≤ k ≤ self.num_points()`.
+    /// Calculate an optimal `k`-clustering for every `0 ≤ k ≤ self.num_points()`.
     ///
     /// For the returned vector, `vec[k]` must be a tuple containing the optimal clustering
     /// for level `k`, along with the [`total_cost`](Cost::total_cost) of that clustering.
@@ -676,7 +701,7 @@ pub trait Cost {
         results
     }
 
-    /// Return the price-of-hierarchy of the clustering-problem.
+    /// Calculate the price-of-hierarchy of the clustering-problem, together with an optimal hierarchy.
     ///
     /// A hierarchical clustering is a set of nested clusterings, one for each possible value of k.
     /// The cost-ratio of level `k` in the hierarchy is its [total cost](`Cost::total_cost`) divided by the cost of
@@ -750,9 +775,11 @@ pub trait Cost {
 
     #[must_use]
     #[inline]
+    /// Calculate a greedy hierarchical clustering.
+    ///
     /// The greedy-hierarchy calculates a hierarchical clustering by starting with
     /// each point in a singleton-cluster, and then repeatedly merging those clusters whose
-    /// merging yields the smallest increase in cost.
+    /// merging yields the smallest increase in cost. Ties are broken arbitrarily.
     ///
     /// For the returned vector, `vec[k]` is a tuple containing the greedy clustering
     /// for level `k`, along with the [`total_cost`](Cost::total_cost) of that clustering.
@@ -781,7 +808,8 @@ pub trait Cost {
         solution
     }
 
-    /// Return the cost-ratio and the hierarchy of a greedy hierarchical clustering.
+    /// Calculate the cost-ratio of a greedy hierarchical clustering.
+    ///
     /// See [`Cost::price_of_hierarchy`] for information about the cost-ratio of a hierarchical clustering,
     /// and the returned hierarchy.
     #[must_use]
@@ -825,7 +853,16 @@ pub struct Discrete {
     costs: Costs,
 }
 impl Discrete {
-    /// Create a discrete `k`-means clustering instance from a given vector of points.
+    /// Create a discrete `k`-means clustering instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::Discrete;
+    ///
+    /// Discrete::kmeans(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// ```
     #[inline]
     pub fn kmeans(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
@@ -835,7 +872,16 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete `k`-median clustering instance from a given vector of points.
+    /// Create a discrete `k`-median clustering instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::Discrete;
+    ///
+    /// Discrete::kmedian(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// ```
     #[inline]
     pub fn kmedian(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
@@ -845,14 +891,24 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete weighted `k`-means clustering instance from a given vector of weighted points.
-    /// If all your points have the same weight, use [`Discrete::kmeans`] instead.
+    /// Create a discrete weighted `k`-means clustering instance.
+    ///
+    /// Use [`Discrete::kmeans`] instead if all your points have the same weight.
     ///
     /// The distance between a weighted point `(w, p)` and the center `(v, c)` is the
     /// squared [euclidean-distance](https://en.wikipedia.org/wiki/Euclidean_norm) between `c` and `p`,
     /// multiplied by `w`.
     /// For instance, the center of the cluster {`(1, [0,0])`, `(2, [3,0])`} will be `(2, [3,0])`, because the cost
     /// of choosing that center is `9`, whereas the cost of choosing `(1, [0,0])` as a center is `18`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::Discrete;
+    ///
+    /// Discrete::weighted_kmeans(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// ```
     #[inline]
     pub fn weighted_kmeans(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
@@ -865,13 +921,23 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete weighted `k`-median clustering instance from a given vector of weighted points.
-    /// If all your points have the same weight, use [`Discrete::kmedian`] instead.
+    /// Create a discrete weighted `k`-median clustering instance.
+    ///
+    /// Use [`Discrete::kmeans`] instead if all your points have the same weight.
     ///
     /// The distance between a weighted point `(w, p)` and the center `(v, c)` is the
     /// [taxicab-distance](https://en.wikipedia.org/wiki/Taxicab_geometry) between `c` and `p`, multiplied by `w`.
     /// For instance, the center of the cluster {`(1, [0,0])`, `(2, [3,0])`} will be `(2, [3,0])`, because the cost
     /// of choosing that center is `3`, whereas the cost of choosing `(1, [0,0])` as a center is `6`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::Discrete;
+    ///
+    /// Discrete::weighted_kmedian(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// ```
     #[inline]
     pub fn weighted_kmedian(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
@@ -917,8 +983,9 @@ impl Cost for Discrete {
     }
 }
 
-/// Create [`Distances`] from Points using a distance-function. This function must be non-negative, but need not
-/// be symmetric or satisfy the triangle-inequality.
+/// Create [`Distances`] from Points using a distance-function.
+///
+/// This function must be non-negative, but need not be symmetric or satisfy the triangle-inequality.
 fn distances_from_points_with_distance_function<T>(
     points: &[T],
     distance_function: impl Fn(&T, &T) -> f64,
@@ -930,8 +997,9 @@ fn distances_from_points_with_distance_function<T>(
 }
 
 /// Create [`Distances`] from Points using a function that will be applied to each coordinate of the difference
-/// between two points, and then summed up. The function must be non-negative, but need not be symmetric or
-/// satisfy the triangle-inequality.
+/// between two points, and then summed up.
+///
+/// The function must be non-negative, but need not be symmetric or satisfy the triangle-inequality.
 fn distances_from_points_with_element_norm(
     points: &[Point],
     elementnorm: impl Fn(f64) -> f64,
@@ -943,6 +1011,7 @@ fn distances_from_points_with_element_norm(
 
 /// Create [`Distances`] from weighted points using a function that will be applied to each coordinate of the
 /// difference between two points, summed up, and then multiplied by the second point's weight.
+///
 /// The function must be non-negative, but need not be symmetric or satisfy the triangle-inequality. The weights
 /// must be non-negative.
 fn distances_from_weighted_points_with_element_norm(
@@ -1044,13 +1113,17 @@ fn verify_weighted_points(weighted_points: &[WeightedPoint]) -> Result<&[Weighte
     Ok(weighted_points)
 }
 
-/// A clustering-problem where each center can be any point in the metric space. The metric
-/// space is the same space the points live in.
+/// A clustering-problem where each center can be any point in the metric space.
+///
+/// The metric space is the same space the points live in.
 ///
 /// The cost of a cluster, given a center, is the sum of the squared Euclidean distances between
 /// the center and all points in the cluster.
 /// The center is automatically calculated to minimise the cost, which turns out to simply be the
 /// average of all point-positions in the cluster.
+///
+/// See the [wikipedia-article on k-means-clustering](https://en.wikipedia.org/wiki/K-means_clustering)
+/// for more information.
 #[derive(Clone, Debug)]
 pub struct KMeans {
     /// The points to be clustered.
@@ -1119,7 +1192,16 @@ impl Cost for KMeans {
     }
 }
 impl KMeans {
-    /// Return a new `k`-means clustering instance from a given vector of points.
+    /// Construct a new `k`-means clustering instance from a slice of points.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::KMeans;
+    ///
+    /// KMeans::new(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// ```
     #[inline]
     pub fn new(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
@@ -1130,13 +1212,19 @@ impl KMeans {
     }
 }
 
-/// A weighted clustering-problem where each center can be any point in the metric space. The metric
-/// space is the same space the weighted points live in.
+/// A weighted clustering-problem where each center can be any point in the metric space.
+///
+/// Use [`KMeans`] instead if all your points have the same weight.
+///
+/// The metric space is the same space the weighted points live in.
 ///
 /// The cost of a cluster, given a center, is the sum of the squared Euclidean distances between
 /// the center and each point in the cluster, multiplied by the point's weight.
 /// The center is automatically calculated to minimise the cost, which turns out to simply be the
 /// weighted average of all point-positions in the cluster.
+///
+/// See the [wikipedia-article on k-means-clustering](https://en.wikipedia.org/wiki/K-means_clustering)
+/// for more information.
 #[derive(Clone, Debug)]
 pub struct WeightedKMeans {
     /// The points to be clustered.
@@ -1186,13 +1274,22 @@ impl Cost for WeightedKMeans {
     }
 }
 impl WeightedKMeans {
-    /// Return a new `k`-means clustering instance from a given vector of points.
+    /// Construct a new `k`-means clustering instance.
     ///
     /// The algorithm runs significantly faster if you sort the points by weight first.
     ///
     /// TODO: Do so internally instead of at callsite. This probably requires better return-values
     /// in the API. Afterwards, rework the `get_high_kmeans_price_of_greedy_instance` function in
     /// integration-tests to not sort the points on its own.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::WeightedKMeans;
+    ///
+    /// WeightedKMeans::new(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// ```
     #[inline]
     pub fn new(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
@@ -1203,10 +1300,31 @@ impl WeightedKMeans {
     }
 }
 
-/// Return a cluster from an iterator of point-indices.
+/// Construct a cluster from an iterator of point-indices.
 ///
 /// TODO: This method only exists due to a malnourished API. An API-improvement should make
 /// it obsolete.
+///
+/// # Examples
+///
+/// ```
+/// use exact_clustering::cluster_from_iterator;
+///
+/// let cluster = cluster_from_iterator([0,2]);
+///
+/// assert!(cluster.contains(0));
+/// assert!(!cluster.contains(1));
+/// assert!(cluster.contains(2));
+///
+/// assert_eq!(cluster.len(), 2);
+///
+/// assert!(!cluster.is_empty());
+///
+/// let mut cluster_iter = cluster.iter();
+/// assert_eq!(cluster_iter.next(), Some(0));
+/// assert_eq!(cluster_iter.next(), Some(2));
+/// assert_eq!(cluster_iter.next(), None);
+/// ```
 #[inline]
 pub fn cluster_from_iterator<I: IntoIterator<Item = usize>>(it: I) -> Cluster {
     let mut cluster = Cluster::new();

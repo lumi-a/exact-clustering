@@ -1,54 +1,59 @@
-//! Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and
-//! [hierarchical clusterings](https://en.wikipedia.org/wiki/Hierarchical_clustering) on up to 32 points.
-//! If you only need approximate clusterings, there are excellent
-//! [other crates](https://www.arewelearningyet.com/clustering/) available that run significantly faster.
-//!
-//! To create discrete (weighted or unweighted) clustering-problems, see [`Discrete`].
-//! For continuous kmeans-clustering, see [`KMeans`] and [`WeightedKMeans`].
-//! If you'd like to solve other clustering-problems, implement the [`Cost`]-trait (and feel free to submit
-//! a pull-request!), or submit an issue on GitHub.
-//!
-//! Among others, the [`Cost`]-trait allows you to calculate:
-//! - Optimal clusterings using [`Cost::optimal_clusterings`]
-//! - Optimal hierarchical clusterings using [`Cost::price_of_hierarchy`]
-//! - Greedy hierarchical clusterings using [`Cost::price_of_greedy`]
-//!
-//! # Example
-//!
-//! ```
-//! use ndarray::prelude::*;
-//! use std::collections::BTreeSet;
-//! use exact_clustering::{Cost as _, Discrete, KMeans};
-//!
-//! // Set of 2d-points looking like ⠥
-//! // This has a uniqe optimal 2-clustering for all three problems.
-//! let points = vec![
-//!     array![0.0, 0.0],
-//!     array![1.0, 0.0],
-//!     array![0.0, 2.0],
-//! ];
-//! // Instances are mutable to allow caching cluster-costs
-//! let mut discrete_kmedian = Discrete::kmedian(&points).unwrap();
-//! // All optimal clusterings are calculated at once to permit some speedups.
-//! let (cost, clusters) = &discrete_kmedian.optimal_clusterings()[2];
-//!
-//! assert_eq!(*cost, 1.0);
-//! // Each cluster in the returned clustering is a set of point-indices:
-//! assert_eq!(
-//!     BTreeSet::from([BTreeSet::from([0, 1]), BTreeSet::from([2])]),
-//!     clusters
-//!         .iter()
-//!         .cloned()
-//!         .map(BTreeSet::from_iter)
-//!         .collect(),
-//! );
-//!
-//! let price_of_hierarchy = discrete_kmedian.price_of_hierarchy().0;
-//! assert_eq!(price_of_hierarchy, 1.0);
-//!
-//! let price_of_greedy = discrete_kmedian.price_of_greedy().0;
-//! assert_eq!(price_of_greedy, 1.0);
-//! ```
+/*!
+Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and
+[hierarchical clusterings](https://en.wikipedia.org/wiki/Hierarchical_clustering) on up to 32 points.
+If you only need approximate clusterings, there are excellent
+[other crates](https://www.arewelearningyet.com/clustering/) available that run significantly faster.
+
+To create discrete (weighted or unweighted) clustering-problems, see [`Discrete`].
+For continuous kmeans-clustering, see [`KMeans`] and [`WeightedKMeans`].
+If you'd like to solve other clustering-problems, implement the [`Cost`]-trait (and feel free to submit
+a pull-request!), or submit an issue on GitHub.
+
+Among others, the [`Cost`]-trait allows you to calculate:
+- Optimal clusterings using [`Cost::optimal_clusterings`]
+- Optimal hierarchical clusterings using [`Cost::price_of_hierarchy`]
+- Greedy hierarchical clusterings using [`Cost::price_of_greedy`]
+
+# Example
+
+```
+use ndarray::prelude::*;
+use std::collections::BTreeSet;
+use exact_clustering::{Cost as _, Discrete, KMeans};
+
+// Set of 2d-points looking like ⠥
+// This has a uniqe optimal 2-clustering for all three problems.
+let points = vec![
+    array![0.0, 0.0],
+    array![1.0, 0.0],
+    array![0.0, 2.0],
+];
+// Instances are mutable to allow caching cluster-costs
+let mut discrete_kmedian = Discrete::kmedian(&points).unwrap();
+// All optimal clusterings are calculated at once to permit some speedups.
+let (cost, clusters) = &discrete_kmedian.optimal_clusterings()[2];
+
+assert_eq!(*cost, 1.0);
+// Each cluster in the returned clustering is a set of point-indices:
+assert_eq!(
+    BTreeSet::from([BTreeSet::from([0, 1]), BTreeSet::from([2])]),
+    clusters
+        .iter()
+        .cloned()
+        .map(BTreeSet::from_iter)
+        .collect(),
+);
+
+let price_of_hierarchy = discrete_kmedian.price_of_hierarchy().0;
+assert_eq!(price_of_hierarchy, 1.0);
+
+let price_of_greedy = discrete_kmedian.price_of_greedy().0;
+assert_eq!(price_of_greedy, 1.0);
+```
+*/
+
+// TODO: Derive serde, see:
+// https://rust-lang.github.io/api-guidelines/interoperability.html#c-serde
 
 #![expect(
     clippy::missing_errors_doc,

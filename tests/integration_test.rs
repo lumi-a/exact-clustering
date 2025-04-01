@@ -362,25 +362,34 @@ fn negative_weighted_instances() {
             (1.0, array![0.0]),
         ];
         assert_eq!(
-            Discrete::weighted_kmedian(&extended),
-            Err(Error::BadWeight(1))
+            Discrete::weighted_kmedian(&extended).err(),
+            Some(Error::BadWeight(1))
         );
         assert_eq!(
-            Discrete::weighted_kmeans(&extended),
-            Err(Error::BadWeight(1))
+            Discrete::weighted_kmeans(&extended).err(),
+            Some(Error::BadWeight(1))
         );
-        assert_eq!(WeightedKMeans::new(&extended), Err(Error::BadWeight(1)));
+        assert_eq!(
+            WeightedKMeans::new(&extended).err(),
+            Some(Error::BadWeight(1))
+        );
     }
 }
 
 #[test]
 fn empty_instances() {
-    assert_eq!(Discrete::kmedian(&[]), Err(Error::EmptyPoints));
-    assert_eq!(Discrete::kmeans(&[]), Err(Error::EmptyPoints));
-    assert_eq!(Discrete::weighted_kmedian(&[]), Err(Error::EmptyPoints));
-    assert_eq!(Discrete::weighted_kmeans(&[]), Err(Error::EmptyPoints));
-    assert_eq!(KMeans::new(&[]), Err(Error::EmptyPoints));
-    assert_eq!(WeightedKMeans::new(&[]), Err(Error::EmptyPoints));
+    assert_eq!(Discrete::kmedian(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(Discrete::kmeans(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(
+        Discrete::weighted_kmedian(&[]).err(),
+        Some(Error::EmptyPoints)
+    );
+    assert_eq!(
+        Discrete::weighted_kmeans(&[]).err(),
+        Some(Error::EmptyPoints)
+    );
+    assert_eq!(KMeans::new(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(WeightedKMeans::new(&[]).err(), Some(Error::EmptyPoints));
 }
 
 #[test]
@@ -456,7 +465,7 @@ fn linear_exponential_hierarchy() {
     }
     points.push(array![((MAX_POINT_COUNT + 1) as f64).exp()]);
     assert_eq!(
-        Discrete::kmedian(&points),
-        Err(Error::TooManyPoints(MAX_POINT_COUNT + 1))
+        Discrete::kmedian(&points).err(),
+        Some(Error::TooManyPoints(MAX_POINT_COUNT + 1))
     );
 }

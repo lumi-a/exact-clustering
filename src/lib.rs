@@ -22,7 +22,6 @@ use std::collections::BTreeSet;
 use exact_clustering::{Cost as _, Discrete, KMeans};
 
 // Set of 2d-points looking like ⠥
-// This has a uniqe optimal 2-clustering for all three problems.
 let points = vec![
     array![0.0, 0.0],
     array![1.0, 0.0],

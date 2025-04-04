@@ -9,6 +9,7 @@ keywords = ["clustering", "k-means", "k-median", "optimization", "algorithms"]
 categories = ["algorithms", "science"]
 readme = "README.md"
 authors = ["lumi-a"]
+rust-version = "1.82"
 
 [dependencies]
 clustering = "0.2.1"

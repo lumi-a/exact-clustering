@@ -739,7 +739,8 @@ pub trait Cost {
                     // SAFETY:
                     // We'll never have more than `num_points` clusters, and `opt_for_fixed_k` can index
                     // up to `num_points`.
-                    *unsafe { opt_for_fixed_k.get_unchecked(clustering.clusters.len()) };
+                    // Dijkstra also terminates after encountering a custering with only 1 cluster.
+                    *unsafe { opt_for_fixed_k.get_unchecked(clustering.clusters.len()-1) };
                 clustering
                     .get_all_merges(self)
                     .into_iter()

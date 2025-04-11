@@ -298,7 +298,7 @@ fn suboptimal_discrete_k_median_hierarchy() {
     // ..    .     .     ..
     //
 
-    let points = vec![
+    let points = [
         array![0.0],
         array![1e-9],
         array![(3.0_f64.sqrt() - 1.0) / 2.0],
@@ -318,8 +318,8 @@ fn suboptimal_discrete_k_median_hierarchy() {
     let expected_hierarchy: Vec<Clustering> = [
         vec![],
         vec![0..=5],
-        vec![0..=3, 4..=5],
-        vec![0..=1, 2..=3, 4..=5],
+        vec![0..=2, 3..=5],
+        vec![0..=2, 3..=3, 4..=5],
         vec![0..=1, 2..=2, 3..=3, 4..=5],
         vec![0..=1, 2..=2, 3..=3, 4..=4, 5..=5],
         vec![0..=0, 1..=1, 2..=2, 3..=3, 4..=4, 5..=5],
@@ -333,6 +333,31 @@ fn suboptimal_discrete_k_median_hierarchy() {
             "Hierarchy-level should match expected hierarchy-level."
         );
     }
+}
+
+#[test]
+fn suboptimal_weighted_discrete_k_median() {
+    // Points like this:
+    //
+    // o    .   .    o
+    let weighted_points = [
+        (1e6, array![0.0]),
+        (1.0, array![1.0 + 1e-6]),
+        (1.0, array![2.0 - 1e-6]),
+        (1e6, array![3.0]),
+    ];
+
+    let mut discrete =
+        Discrete::weighted_kmedian(&weighted_points).expect("Creating discrete should not fail.");
+    assert_eq!(discrete.num_points(), weighted_points.len());
+
+    let (greedy_score, greedy_hierarchy) = discrete.price_of_greedy();
+    assert_eq!(greedy_hierarchy.len(), weighted_points.len() + 1);
+    assert!(((1.5 - 1e-5)..1.5).contains(&greedy_score));
+
+    let (hierarchy_score, optimal_hierarchy) = discrete.price_of_hierarchy();
+    assert_eq!(optimal_hierarchy.len(), weighted_points.len() + 1);
+    assert!((1.0..(1.0 + 1e-5)).contains(&hierarchy_score));
 }
 
 #[test]

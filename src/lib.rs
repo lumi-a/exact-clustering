@@ -325,6 +325,10 @@ impl ClusteringNodeMergeMultiple {
     /// For every point, try re-assigning that point to a different cluster and check if it decreases the
     /// cost, repeating this until re-assigning points no longer decreases the cost.
     fn optimise_locally<C: Cost + ?Sized>(&mut self, data: &mut C) {
+        // Due to floating-point inaccuracies, we could enter an infinite loop if
+        // we accept an "improvement" as "improves cost by some positive amount", so
+        // we additionally keep track of already-visited states.
+        let mut already_visited: FxHashSet<(Cluster, usize, usize)> = FxHashSet::default();
         let mut found_improvement = || {
             #[expect(
                 clippy::indexing_slicing,
@@ -341,6 +345,13 @@ impl ClusteringNodeMergeMultiple {
                     for target_cluster_ix in
                         (0..self.clusters.len()).filter(|ix| *ix != source_cluster_ix)
                     {
+                        if already_visited.insert((
+                            source_cluster,
+                            source_cluster_ix,
+                            target_cluster_ix,
+                        )) {
+                            continue;
+                        }
                         let target_cluster = self.clusters[target_cluster_ix];
 
                         let mut updated_target_cluster = target_cluster;
@@ -358,7 +369,6 @@ impl ClusteringNodeMergeMultiple {
                                 self.clusters[source_cluster_ix] = updated_target_cluster;
                                 self.clusters[target_cluster_ix] = updated_source_cluster;
                             }
-
                             self.cost += costdelta;
                             return true;
                         }
@@ -1276,7 +1286,9 @@ impl Cost for WeightedKMeans {
 impl WeightedKMeans {
     /// Construct a new `k`-means clustering instance.
     ///
-    /// The algorithm runs significantly faster if you sort the points by weight first.
+    /// The algorithm runs significantly faster if you sort the points by weight first, merge
+    /// points that have the same positions into one (adding their weights), and break symmetries
+    /// by applying a small amount of noise.
     ///
     /// TODO: Do so internally instead of at callsite. This probably requires better return-values
     /// in the API. Afterwards, rework the `get_high_kmeans_price_of_greedy_instance` function in
@@ -1618,5 +1630,35 @@ mod tests {
             ],
             &nodes,
         );
+    }
+
+    #[test]
+    fn infinite_loop_optimise_locally() {
+        // Due to floating-point inaccuracies, `optimise_locally` could enter an infinite loop if
+        // one accepts an "improvement" as "improves cost by some positive amount".
+
+        // Magic values that came up during random search.
+        let (weight_a, point_a) = (0.588_906_661, array![-0.487_778_761_130_834]);
+        let (weight_b, point_b) = (0.434_371_596, array![-0.438_191_407_837_575]);
+        let points = [
+            (weight_a, -point_a.clone()),
+            (weight_b, -point_b.clone()),
+            (1.0, array![0.0]),
+            (weight_a, point_a),
+            (weight_b, point_b),
+        ];
+        let mut kmedian =
+            Discrete::weighted_kmedian(&points).expect("Creating discrete should not fail.");
+
+        let mut clustering = ClusteringNodeMergeMultiple {
+            clusters: SmallVec::from_iter([
+                cluster_from_iterator([0, 1, 2]),
+                cluster_from_iterator([3, 4]),
+            ]),
+            cost: 0.488_933_068_284_744_25,
+        };
+
+        // In a careless implementation, this would enter an infinite loop.
+        clustering.optimise_locally(&mut kmedian);
     }
 }

@@ -2,7 +2,7 @@
 Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and
 [hierarchical clusterings](https://en.wikipedia.org/wiki/Hierarchical_clustering) on up to 32 points.
 If you only need approximate clusterings, there are excellent
-[other crates](https://www.arewelearningyet.com/clustering/) available that run significantly faster.
+[other crates](https://www.arewelearningyet.com/clustering/) that run significantly faster.
 
 To create discrete (weighted or unweighted) clustering-problems, see [`Discrete`].
 For continuous kmeans-clustering, see [`KMeans`] and [`WeightedKMeans`].

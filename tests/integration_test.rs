@@ -1,4 +1,4 @@
-#![allow(missing_docs, reason = "Docs aren't be necessary for tests.")]
+#![allow(missing_docs, reason = "Not part of the API.")]
 #![allow(
     clippy::indexing_slicing,
     reason = "Panicking indexing is fine in tests."

@@ -345,7 +345,7 @@ impl ClusteringNodeMergeMultiple {
                     for target_cluster_ix in
                         (0..self.clusters.len()).filter(|ix| *ix != source_cluster_ix)
                     {
-                        if already_visited.insert((
+                        if !already_visited.insert((
                             source_cluster,
                             source_cluster_ix,
                             target_cluster_ix,
@@ -1659,6 +1659,39 @@ mod tests {
         };
 
         // In a careless implementation, this would enter an infinite loop.
+        clustering.optimise_locally(&mut kmedian);
+    }
+
+    #[test]
+    fn infinite_loop_optimise_locally_1() {
+        // Another batch of numbers that came up tails in random search
+        // Regrettably still looped before v0.4.0.
+        let points = vec![
+            (1.870_423_609_633_216e24, array![1000.0, -1000.0, 1000.0]),
+            (3.817_589_201_683_946e23, array![1000.0, 1000.0, -1000.0]),
+            (2.074_998_884_450_784_5e21, array![1000.0, 1000.0, 1000.0]),
+            (
+                1.0,
+                array![
+                    -400.240_609_956_200_4,
+                    616.506_453_035_030_1,
+                    -79.475_319_067_602_64
+                ],
+            ),
+            (1.0, array![-1000.0, 415.010_128_673_398_5, 1000.0]),
+        ];
+        let mut kmedian =
+            Discrete::weighted_kmedian(&points).expect("Creating discrete should not fail.");
+
+        let mut clustering = ClusteringNodeMergeMultiple {
+            clusters: SmallVec::from_iter([
+                cluster_from_iterator([0, 2, 4]),
+                cluster_from_iterator([1, 3]),
+            ]),
+            cost: 4.149_997_768_901_569e24,
+        };
+
+        // This used to loop infinitely
         clustering.optimise_locally(&mut kmedian);
     }
 }

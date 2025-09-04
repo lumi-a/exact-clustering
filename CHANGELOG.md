@@ -3,6 +3,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-09-04
+
+### Fixed
+- Corrected a typo in the previous release, which only made infinite loops less likely, but not impossible.
+
+
 
 ## [0.3.0] - 2025-08-31
 

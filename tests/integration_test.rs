@@ -152,8 +152,9 @@ fn high_kmeans_price_of_greedy() {
 #[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
 fn cost() {
     let grid = square_grid();
-    let mut kmedian = Discrete::kmedian(&grid).expect("Creating discrete should not fail.");
-    let mut discrete_kmeans = Discrete::kmeans(&grid).expect("Creating discrete should not fail.");
+    let mut kmedian = KMedian::l1(&grid).expect("Creating discrete should not fail.");
+    let mut discrete_kmeans =
+        KMedian::l2_squared(&grid).expect("Creating discrete should not fail.");
     let mut kmeans = KMeans::new(&grid).expect("Creating kmeans should not fail.");
     for i in [0, 4, 8, 12] {
         let cluster = cluster_from_iterator(i..(i + 4));
@@ -167,10 +168,9 @@ fn cost() {
 #[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
 fn weighted_cost() {
     let square = weighted_square();
-    let mut kmedian =
-        Discrete::weighted_kmedian(&square).expect("Creating kmedian should not fail.");
+    let mut kmedian = KMedian::weighted_l1(&square).expect("Creating kmedian should not fail.");
     let mut discrete_kmeans =
-        Discrete::weighted_kmeans(&square).expect("Creating discrete kmeans should not fail.");
+        KMedian::weighted_l2_squared(&square).expect("Creating discrete kmeans should not fail.");
     let mut kmeans = WeightedKMeans::new(&square).expect("Creating kmeans should not fail.");
 
     let full_cluster = cluster_from_iterator(0..4);
@@ -183,8 +183,7 @@ fn weighted_cost() {
 #[test]
 fn optimal_discrete_k_median_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-    let mut discrete =
-        Discrete::kmedian(&square_grid()).expect("Creating discrete should not fail.");
+    let mut discrete = KMedian::l1(&square_grid()).expect("Creating discrete should not fail.");
 
     let optimals = discrete.optimal_clusterings();
     let (score, clusters) = &optimals[4];
@@ -206,7 +205,7 @@ fn optimal_discrete_k_median_clustering() {
 fn optimal_discrete_k_means_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
     let mut discrete =
-        Discrete::kmeans(&square_grid()).expect("Creating discrete should not fail.");
+        KMedian::l2_squared(&square_grid()).expect("Creating discrete should not fail.");
 
     let (score, clusters) = &discrete.optimal_clusterings()[4];
     assert_eq!(
@@ -244,8 +243,7 @@ fn optimal_continuous_k_means_clustering() {
 #[test]
 fn optimal_discrete_k_median_hierarchy() {
     let triangle_grid = triangle_grid();
-    let mut discrete =
-        Discrete::kmedian(&triangle_grid).expect("Creating discrete should not fail.");
+    let mut discrete = KMedian::l1(&triangle_grid).expect("Creating discrete should not fail.");
     assert_eq!(discrete.num_points(), triangle_grid.len());
     let (score, hierarchy) = discrete.price_of_hierarchy();
     assert_eq!(hierarchy.len(), triangle_grid.len() + 1);
@@ -306,7 +304,7 @@ fn suboptimal_discrete_k_median_hierarchy() {
         array![1.0 + 1e-9],
         array![1.0 + 3e-9],
     ];
-    let mut discrete = Discrete::kmedian(&points).expect("Creating discrete should not fail.");
+    let mut discrete = KMedian::l1(&points).expect("Creating discrete should not fail.");
     assert_eq!(discrete.num_points(), points.len());
     let (score, hierarchy) = discrete.price_of_hierarchy();
     assert_eq!(hierarchy.len(), points.len() + 1);
@@ -348,7 +346,7 @@ fn suboptimal_weighted_discrete_k_median() {
     ];
 
     let mut discrete =
-        Discrete::weighted_kmedian(&weighted_points).expect("Creating discrete should not fail.");
+        KMedian::weighted_l1(&weighted_points).expect("Creating discrete should not fail.");
     assert_eq!(discrete.num_points(), weighted_points.len());
 
     let (greedy_score, greedy_hierarchy) = discrete.price_of_greedy();
@@ -368,8 +366,8 @@ fn negative_weighted_instances() {
     )]
     for nonnegatively_weighted_point in [(1.0, array![0.0]), (1e100, array![0.0])] {
         let extended = [nonnegatively_weighted_point];
-        Discrete::weighted_kmedian(&extended).expect("These weights should be accepted");
-        Discrete::weighted_kmeans(&extended).expect("These weights should be accepted");
+        KMedian::weighted_l1(&extended).expect("These weights should be accepted");
+        KMedian::weighted_l2_squared(&extended).expect("These weights should be accepted");
         WeightedKMeans::new(&extended).expect("These weights should be accepted");
     }
 
@@ -387,11 +385,11 @@ fn negative_weighted_instances() {
             (1.0, array![0.0]),
         ];
         assert_eq!(
-            Discrete::weighted_kmedian(&extended).err(),
+            KMedian::weighted_l1(&extended).err(),
             Some(Error::BadWeight(1))
         );
         assert_eq!(
-            Discrete::weighted_kmeans(&extended).err(),
+            KMedian::weighted_l2_squared(&extended).err(),
             Some(Error::BadWeight(1))
         );
         assert_eq!(
@@ -403,14 +401,11 @@ fn negative_weighted_instances() {
 
 #[test]
 fn empty_instances() {
-    assert_eq!(Discrete::kmedian(&[]).err(), Some(Error::EmptyPoints));
-    assert_eq!(Discrete::kmeans(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(KMedian::l1(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(KMedian::l2_squared(&[]).err(), Some(Error::EmptyPoints));
+    assert_eq!(KMedian::weighted_l1(&[]).err(), Some(Error::EmptyPoints));
     assert_eq!(
-        Discrete::weighted_kmedian(&[]).err(),
-        Some(Error::EmptyPoints)
-    );
-    assert_eq!(
-        Discrete::weighted_kmeans(&[]).err(),
+        KMedian::weighted_l2_squared(&[]).err(),
         Some(Error::EmptyPoints)
     );
     assert_eq!(KMeans::new(&[]).err(), Some(Error::EmptyPoints));
@@ -438,12 +433,10 @@ fn singleton_instances() {
     let high_dimensional_singleton = [Array1::from_iter((0..256).map(f64::from))];
     let high_dimensional_weighted_singleton = [(1.0, Array1::from_iter((0..256).map(f64::from)))];
 
-    correct_clustering(Discrete::kmedian(&high_dimensional_singleton));
-    correct_clustering(Discrete::kmeans(&high_dimensional_singleton));
-    correct_clustering(Discrete::weighted_kmedian(
-        &high_dimensional_weighted_singleton,
-    ));
-    correct_clustering(Discrete::weighted_kmeans(
+    correct_clustering(KMedian::l1(&high_dimensional_singleton));
+    correct_clustering(KMedian::l2_squared(&high_dimensional_singleton));
+    correct_clustering(KMedian::weighted_l1(&high_dimensional_weighted_singleton));
+    correct_clustering(KMedian::weighted_l2_squared(
         &high_dimensional_weighted_singleton,
     ));
     correct_clustering(KMeans::new(&high_dimensional_singleton));
@@ -483,14 +476,14 @@ fn linear_exponential_hierarchy() {
         points.push(array![(-(i as f64)).exp()]);
         assert_eq!(points.len(), i);
 
-        let mut kmedian = Discrete::kmedian(&points).expect("Creating discrete should not fail.");
+        let mut kmedian = KMedian::l1(&points).expect("Creating discrete should not fail.");
 
         correct_hierarchy(i, kmedian.price_of_greedy());
         correct_hierarchy(i, kmedian.price_of_hierarchy());
     }
     points.push(array![((MAX_POINT_COUNT + 1) as f64).exp()]);
     assert_eq!(
-        Discrete::kmedian(&points).err(),
+        KMedian::l1(&points).err(),
         Some(Error::TooManyPoints(MAX_POINT_COUNT + 1))
     );
 }

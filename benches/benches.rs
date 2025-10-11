@@ -12,7 +12,7 @@
 #![allow(clippy::missing_panics_doc, reason = "Benchmarks should not panic.")]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use exact_clustering::{Cost as _, Discrete, KMeans, Point};
+use exact_clustering::{Cost as _, KMeans, KMedian, Point};
 use ndarray::prelude::*;
 
 /// Create a 2d-grid of `width`×`height` points.
@@ -31,7 +31,7 @@ pub fn optimal_clustering(c: &mut Criterion) {
         &format!("4×4 grid, discrete k-median, opt for k=1..={}", grid.len()),
         |b| {
             b.iter(|| {
-                black_box(Discrete::kmedian(&grid).unwrap()).optimal_clusterings();
+                black_box(KMedian::l1(&grid).unwrap()).optimal_clusterings();
             });
         },
     );
@@ -50,7 +50,7 @@ pub fn hierarchies(c: &mut Criterion) {
 
     c.bench_function("4×4 grid, discrete k-median hierarchy", |b| {
         b.iter(|| {
-            let _: f64 = black_box(Discrete::kmedian(&grid).unwrap())
+            let _: f64 = black_box(KMedian::l1(&grid).unwrap())
                 .price_of_hierarchy()
                 .0;
         });

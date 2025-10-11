@@ -4,8 +4,8 @@ Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and
 If you only need approximate clusterings, there are excellent
 [other crates](https://www.arewelearningyet.com/clustering/) that run significantly faster.
 
-To create discrete (weighted or unweighted) clustering-problems, see [`Discrete`].
-For continuous kmeans-clustering, see [`KMeans`] and [`WeightedKMeans`].
+For weighted and unweighted kmedian-clustering (where centers are chosen from the points themselves), see [`Discrete`].
+For kmeans-clustering (where centers are chosen from the ambient space), see [`KMeans`] and [`WeightedKMeans`].
 If you'd like to solve other clustering-problems, implement the [`Cost`]-trait (and feel free to submit
 a pull-request!), or submit an issue on GitHub.
 
@@ -856,25 +856,25 @@ pub trait Cost {
 /// is the sum of the distances between the center and all points in the cluster. The cost of a cluster
 /// will always be calculated by choosing the center yielding the smallest cost.
 #[derive(Clone, Debug)]
-pub struct Discrete {
+pub struct KMedian {
     /// The distances between the points.
     distances: Distances,
     /// A cache for storing already-calculated costs of clusters.
     costs: Costs,
 }
-impl Discrete {
-    /// Create a discrete `k`-means clustering instance.
+impl KMedian {
+    /// Create a `k`-median clustering instance using the squared L2-norm.
     ///
     /// # Examples
     ///
     /// ```
     /// use ndarray::array;
-    /// use exact_clustering::Discrete;
+    /// use exact_clustering::KMedian;
     ///
-    /// Discrete::kmeans(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// KMedian::l2_squared(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
     /// ```
     #[inline]
-    pub fn kmeans(points: &[Point]) -> Result<Self, Error> {
+    pub fn l2_squared(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
         Ok(Self {
             distances: distances_from_points_with_element_norm(verified_points, |x| x.powi(2)),
@@ -882,18 +882,42 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete `k`-median clustering instance.
+    /// Create a `k`-median clustering instance using the L2-norm.
     ///
     /// # Examples
     ///
     /// ```
     /// use ndarray::array;
-    /// use exact_clustering::Discrete;
+    /// use exact_clustering::KMedian;
     ///
-    /// Discrete::kmedian(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// KMedian::l2(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
+    /// ```
+    ///
+    /// TODO: This is uncovered by tests.
+    #[inline]
+    pub fn l2(points: &[Point]) -> Result<Self, Error> {
+        let verified_points = verify_points(points)?;
+        Ok(Self {
+            distances: distances_from_points_with_element_norm(verified_points, |x| x.powi(2))
+                .iter()
+                .map(|vec| vec.iter().map(|x| x.sqrt()).collect())
+                .collect(),
+            costs: Costs::default(),
+        })
+    }
+
+    /// Create a `k`-median clustering instance using the L1-norm.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::KMedian;
+    ///
+    /// KMedian::l1(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
     /// ```
     #[inline]
-    pub fn kmedian(points: &[Point]) -> Result<Self, Error> {
+    pub fn l1(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
         Ok(Self {
             distances: distances_from_points_with_element_norm(verified_points, f64::abs),
@@ -901,9 +925,9 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete weighted `k`-means clustering instance.
+    /// Create a `k`-median clustering instance using the squared L2-norm.
     ///
-    /// Use [`Discrete::kmeans`] instead if all your points have the same weight.
+    /// Use [`KMedian::l2_squared`] instead if all your points have the same weight.
     ///
     /// The distance between a weighted point `(w, p)` and the center `(v, c)` is the
     /// squared [euclidean-distance](https://en.wikipedia.org/wiki/Euclidean_norm) between `c` and `p`,
@@ -915,12 +939,12 @@ impl Discrete {
     ///
     /// ```
     /// use ndarray::array;
-    /// use exact_clustering::Discrete;
+    /// use exact_clustering::KMedian;
     ///
-    /// Discrete::weighted_kmeans(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// KMedian::weighted_l2_squared(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
     /// ```
     #[inline]
-    pub fn weighted_kmeans(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
+    pub fn weighted_l2_squared(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
         Ok(Self {
             distances: distances_from_weighted_points_with_element_norm(
@@ -931,9 +955,42 @@ impl Discrete {
         })
     }
 
-    /// Create a discrete weighted `k`-median clustering instance.
+    /// Create a `k`-median clustering instance using the L2-norm.
     ///
-    /// Use [`Discrete::kmeans`] instead if all your points have the same weight.
+    /// Use [`KMedian::l2`] instead if all your points have the same weight.
+    ///
+    /// The distance between a weighted point `(w, p)` and the center `(v, c)` is the
+    /// [euclidean-distance](https://en.wikipedia.org/wiki/Euclidean_norm) between `c` and `p`,
+    /// multiplied by `w`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use exact_clustering::KMedian;
+    ///
+    /// KMedian::weighted_l2(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// ```
+    ///
+    /// TODO: This is uncovered by tests.
+    #[inline]
+    pub fn weighted_l2(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
+        let verified_weighted_points = verify_weighted_points(weighted_points)?;
+        Ok(Self {
+            distances: distances_from_weighted_points_with_element_norm(
+                verified_weighted_points,
+                |x| x.powi(2),
+            )
+            .iter()
+            .map(|vec| vec.iter().map(|x| x.sqrt()).collect())
+            .collect(),
+            costs: Costs::default(),
+        })
+    }
+
+    /// Create a `k`-median clustering instance using the L1-norm.
+    ///
+    /// Use [`KMedian::l1`] instead if all your points have the same weight.
     ///
     /// The distance between a weighted point `(w, p)` and the center `(v, c)` is the
     /// [taxicab-distance](https://en.wikipedia.org/wiki/Taxicab_geometry) between `c` and `p`, multiplied by `w`.
@@ -944,12 +1001,12 @@ impl Discrete {
     ///
     /// ```
     /// use ndarray::array;
-    /// use exact_clustering::Discrete;
+    /// use exact_clustering::KMedian;
     ///
-    /// Discrete::weighted_kmedian(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// KMedian::l1(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
     /// ```
     #[inline]
-    pub fn weighted_kmedian(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
+    pub fn weighted_l1(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
         Ok(Self {
             distances: distances_from_weighted_points_with_element_norm(
@@ -960,7 +1017,7 @@ impl Discrete {
         })
     }
 }
-impl Cost for Discrete {
+impl Cost for KMedian {
     // TODO: Could we achieve a faster optimal-clusterings-impl for Discrete
     // by not searching for clusterings but for centroids?
     #[inline]
@@ -1486,8 +1543,9 @@ mod tests {
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete = Discrete::kmeans(&[array![0.0], array![1.0], array![2.0], array![3.0]])
-            .expect("Creating discrete should not fail.");
+        let mut discrete =
+            KMedian::l2_squared(&[array![0.0], array![1.0], array![2.0], array![3.0]])
+                .expect("Creating discrete should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeMultiple>| {
             *nodes = nodes
                 .iter()
@@ -1560,8 +1618,8 @@ mod tests {
             clusters: smallvec![Cluster(1), Cluster(0)],
             cost: 0.0,
         };
-        let mut small_discrete = Discrete::kmedian(&[array![0.0], array![1.0]])
-            .expect("Creating discrete should not fail.");
+        let mut small_discrete =
+            KMedian::l1(&[array![0.0], array![1.0]]).expect("Creating discrete should not fail.");
         let _: Vec<_> = unsorted
             .get_all_merges(&mut small_discrete) // This should fail.
             .into_iter()
@@ -1580,8 +1638,9 @@ mod tests {
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete = Discrete::kmeans(&[array![0.0], array![1.0], array![2.0], array![3.0]])
-            .expect("Creating discrete should not fail.");
+        let mut discrete =
+            KMedian::l2_squared(&[array![0.0], array![1.0], array![2.0], array![3.0]])
+                .expect("Creating discrete should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeSingle>| {
             *nodes = nodes
                 .iter()
@@ -1648,7 +1707,7 @@ mod tests {
             (weight_b, point_b),
         ];
         let mut kmedian =
-            Discrete::weighted_kmedian(&points).expect("Creating discrete should not fail.");
+            KMedian::weighted_l1(&points).expect("Creating discrete should not fail.");
 
         let mut clustering = ClusteringNodeMergeMultiple {
             clusters: SmallVec::from_iter([
@@ -1681,7 +1740,7 @@ mod tests {
             (1.0, array![-1000.0, 415.010_128_673_398_5, 1000.0]),
         ];
         let mut kmedian =
-            Discrete::weighted_kmedian(&points).expect("Creating discrete should not fail.");
+            KMedian::weighted_l1(&points).expect("Creating discrete should not fail.");
 
         let mut clustering = ClusteringNodeMergeMultiple {
             clusters: SmallVec::from_iter([

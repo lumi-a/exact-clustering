@@ -3,6 +3,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.5.0] - 2025-10-11
+
+### Changed
+- The public API function no longer refers to clustering-problems by "Discrete" and "Continuous" but by "KMedian" and "KMeans".
+- "Discrete KMeans" is now more properly referred to as "KMedian L2-squared".
+- "Discrete KMedian" is now more properly referred to as "KMedian L1".
+
+### Added
+- `KMedian` now has the methods `l2` and `weighted_l2` (complementing `l2_squared` and `weighted_l2_squared`).
+
+
+
 ## [0.4.0] - 2025-09-04
 
 ### Fixed

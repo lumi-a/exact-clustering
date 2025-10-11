@@ -28,7 +28,7 @@ fn grid(width: u32, height: u32) -> Vec<Point> {
 pub fn optimal_clustering(c: &mut Criterion) {
     let grid = grid(4, 4);
     c.bench_function(
-        &format!("4×4 grid, discrete k-median, opt for k=1..={}", grid.len()),
+        &format!("4×4 grid, k-median l1, opt for k=1..={}", grid.len()),
         |b| {
             b.iter(|| {
                 black_box(KMedian::l1(&grid).unwrap()).optimal_clusterings();
@@ -36,7 +36,7 @@ pub fn optimal_clustering(c: &mut Criterion) {
         },
     );
     c.bench_function(
-        &format!("4×4 grid, continuous k-means, opt for k=1..={}", grid.len()),
+        &format!("4×4 grid, k-means, opt for k=1..={}", grid.len()),
         |b| {
             b.iter(|| {
                 black_box(KMeans::new(&grid).unwrap()).optimal_clusterings();
@@ -48,14 +48,14 @@ pub fn optimal_clustering(c: &mut Criterion) {
 pub fn hierarchies(c: &mut Criterion) {
     let grid = grid(4, 4);
 
-    c.bench_function("4×4 grid, discrete k-median hierarchy", |b| {
+    c.bench_function("4×4 grid, k-median l1 hierarchy", |b| {
         b.iter(|| {
             let _: f64 = black_box(KMedian::l1(&grid).unwrap())
                 .price_of_hierarchy()
                 .0;
         });
     });
-    c.bench_function("4×4 grid, continuous k-means hierarchy", |b| {
+    c.bench_function("4×4 grid, k-means hierarchy", |b| {
         b.iter(|| {
             let _: f64 = black_box(KMeans::new(&grid).unwrap())
                 .price_of_hierarchy()

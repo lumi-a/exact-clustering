@@ -4,7 +4,7 @@ Find optimal [clusterings](https://en.wikipedia.org/wiki/Cluster_analysis) and
 If you only need approximate clusterings, there are excellent
 [other crates](https://www.arewelearningyet.com/clustering/) that run significantly faster.
 
-For weighted and unweighted kmedian-clustering (where centers are chosen from the points themselves), see [`Discrete`].
+For weighted and unweighted kmedian-clustering (where centers are chosen from the points themselves), see [`KMedian`].
 For kmeans-clustering (where centers are chosen from the ambient space), see [`KMeans`] and [`WeightedKMeans`].
 If you'd like to solve other clustering-problems, implement the [`Cost`]-trait (and feel free to submit
 a pull-request!), or submit an issue on GitHub.
@@ -19,7 +19,7 @@ Among others, the [`Cost`]-trait allows you to calculate:
 ```
 use ndarray::prelude::*;
 use std::collections::BTreeSet;
-use exact_clustering::{Cost as _, Discrete, KMeans};
+use exact_clustering::{Cost as _, KMedian, KMeans};
 
 // Set of 2d-points looking like ⠥
 let points = vec![
@@ -28,9 +28,9 @@ let points = vec![
     array![0.0, 2.0],
 ];
 // Instances are mutable to allow caching cluster-costs
-let mut discrete_kmedian = Discrete::kmedian(&points).unwrap();
+let mut kmedian = KMedian::l1(&points).unwrap();
 // All optimal clusterings are calculated at once to permit some speedups.
-let (cost, clusters) = &discrete_kmedian.optimal_clusterings()[2];
+let (cost, clusters) = &kmedian.optimal_clusterings()[2];
 
 assert_eq!(*cost, 1.0);
 // Each cluster in the returned clustering is a set of point-indices:
@@ -43,10 +43,10 @@ assert_eq!(
         .collect(),
 );
 
-let price_of_hierarchy = discrete_kmedian.price_of_hierarchy().0;
+let price_of_hierarchy = kmedian.price_of_hierarchy().0;
 assert_eq!(price_of_hierarchy, 1.0);
 
-let price_of_greedy = discrete_kmedian.price_of_greedy().0;
+let price_of_greedy = kmedian.price_of_greedy().0;
 assert_eq!(price_of_greedy, 1.0);
 ```
 */
@@ -1003,7 +1003,7 @@ impl KMedian {
     /// use ndarray::array;
     /// use exact_clustering::KMedian;
     ///
-    /// KMedian::l1(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
+    /// KMedian::weighted_l1(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
     /// ```
     #[inline]
     pub fn weighted_l1(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
@@ -1018,7 +1018,7 @@ impl KMedian {
     }
 }
 impl Cost for KMedian {
-    // TODO: Could we achieve a faster optimal-clusterings-impl for Discrete
+    // TODO: Could we achieve a faster optimal-clusterings-impl for KMedian
     // by not searching for clusterings but for centroids?
     #[inline]
     fn num_points(&self) -> usize {
@@ -1543,13 +1543,13 @@ mod tests {
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete =
+        let mut kmedian =
             KMedian::l2_squared(&[array![0.0], array![1.0], array![2.0], array![3.0]])
-                .expect("Creating discrete should not fail.");
+                .expect("Creating kmedian should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeMultiple>| {
             *nodes = nodes
                 .iter()
-                .flat_map(|n| n.get_all_merges(&mut discrete))
+                .flat_map(|n| n.get_all_merges(&mut kmedian))
                 .collect();
         };
         let mut nodes = vec![ClusteringNodeMergeMultiple::new_singletons(4)];
@@ -1618,10 +1618,10 @@ mod tests {
             clusters: smallvec![Cluster(1), Cluster(0)],
             cost: 0.0,
         };
-        let mut small_discrete =
-            KMedian::l1(&[array![0.0], array![1.0]]).expect("Creating discrete should not fail.");
+        let mut small_kmedian =
+            KMedian::l1(&[array![0.0], array![1.0]]).expect("Creating kmedian should not fail.");
         let _: Vec<_> = unsorted
-            .get_all_merges(&mut small_discrete) // This should fail.
+            .get_all_merges(&mut small_kmedian) // This should fail.
             .into_iter()
             .collect_vec();
     }
@@ -1638,13 +1638,13 @@ mod tests {
                 "Clustering should match expected clustering. Maybe the order of returned Clusters has changed?"
             );
         }
-        let mut discrete =
+        let mut kmedian =
             KMedian::l2_squared(&[array![0.0], array![1.0], array![2.0], array![3.0]])
-                .expect("Creating discrete should not fail.");
+                .expect("Creating kmedian should not fail.");
         let mut update_nodes = |nodes: &mut Vec<ClusteringNodeMergeSingle>| {
             *nodes = nodes
                 .iter()
-                .flat_map(|n| n.get_next_nodes(&mut discrete, 3).collect_vec())
+                .flat_map(|n| n.get_next_nodes(&mut kmedian, 3).collect_vec())
                 .collect();
         };
         let mut nodes = vec![ClusteringNodeMergeSingle::empty()];
@@ -1706,8 +1706,7 @@ mod tests {
             (weight_a, point_a),
             (weight_b, point_b),
         ];
-        let mut kmedian =
-            KMedian::weighted_l1(&points).expect("Creating discrete should not fail.");
+        let mut kmedian = KMedian::weighted_l1(&points).expect("Creating kmedian should not fail.");
 
         let mut clustering = ClusteringNodeMergeMultiple {
             clusters: SmallVec::from_iter([
@@ -1739,8 +1738,7 @@ mod tests {
             ),
             (1.0, array![-1000.0, 415.010_128_673_398_5, 1000.0]),
         ];
-        let mut kmedian =
-            KMedian::weighted_l1(&points).expect("Creating discrete should not fail.");
+        let mut kmedian = KMedian::weighted_l1(&points).expect("Creating kmedian should not fail.");
 
         let mut clustering = ClusteringNodeMergeMultiple {
             clusters: SmallVec::from_iter([

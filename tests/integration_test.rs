@@ -152,14 +152,13 @@ fn high_kmeans_price_of_greedy() {
 #[expect(clippy::float_cmp, reason = "These comparisons should be exact.")]
 fn cost() {
     let grid = square_grid();
-    let mut kmedian = KMedian::l1(&grid).expect("Creating discrete should not fail.");
-    let mut discrete_kmeans =
-        KMedian::l2_squared(&grid).expect("Creating discrete should not fail.");
+    let mut kmedian_l1 = KMedian::l1(&grid).expect("Creating kmedian should not fail.");
+    let mut kmedian_l2 = KMedian::l2_squared(&grid).expect("Creating kmedian should not fail.");
     let mut kmeans = KMeans::new(&grid).expect("Creating kmeans should not fail.");
     for i in [0, 4, 8, 12] {
         let cluster = cluster_from_iterator(i..(i + 4));
-        assert_eq!(kmedian.cost(cluster), 4.0);
-        assert_eq!(discrete_kmeans.cost(cluster), 4.0);
+        assert_eq!(kmedian_l1.cost(cluster), 4.0);
+        assert_eq!(kmedian_l2.cost(cluster), 4.0);
         assert_eq!(kmeans.cost(cluster), 4.0 * 0.5);
     }
 }
@@ -169,23 +168,23 @@ fn cost() {
 fn weighted_cost() {
     let square = weighted_square();
     let mut kmedian = KMedian::weighted_l1(&square).expect("Creating kmedian should not fail.");
-    let mut discrete_kmeans =
-        KMedian::weighted_l2_squared(&square).expect("Creating discrete kmeans should not fail.");
+    let mut kmedian_l2_squared =
+        KMedian::weighted_l2_squared(&square).expect("Creating kmedian kmeans should not fail.");
     let mut kmeans = WeightedKMeans::new(&square).expect("Creating kmeans should not fail.");
 
     let full_cluster = cluster_from_iterator(0..4);
     assert_eq!(kmedian.cost(full_cluster), 5.0);
-    assert_eq!(discrete_kmeans.cost(full_cluster), 5.0);
+    assert_eq!(kmedian_l2_squared.cost(full_cluster), 5.0);
     // Centroid should be at (0.375, 0.25)
     assert_eq!(kmeans.cost(full_cluster), 3.375);
 }
 
 #[test]
-fn optimal_discrete_k_median_clustering() {
+fn optimal_kmedian_l1_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-    let mut discrete = KMedian::l1(&square_grid()).expect("Creating discrete should not fail.");
+    let mut kmedian = KMedian::l1(&square_grid()).expect("Creating kmedian should not fail.");
 
-    let optimals = discrete.optimal_clusterings();
+    let optimals = kmedian.optimal_clusterings();
     let (score, clusters) = &optimals[4];
     assert_eq!(
         *clusters, expected_clusters,
@@ -202,12 +201,12 @@ fn optimal_discrete_k_median_clustering() {
 }
 
 #[test]
-fn optimal_discrete_k_means_clustering() {
+fn optimal_kmedian_l2_squared_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
-    let mut discrete =
-        KMedian::l2_squared(&square_grid()).expect("Creating discrete should not fail.");
+    let mut kmedian =
+        KMedian::l2_squared(&square_grid()).expect("Creating kmedian should not fail.");
 
-    let (score, clusters) = &discrete.optimal_clusterings()[4];
+    let (score, clusters) = &kmedian.optimal_clusterings()[4];
     assert_eq!(
         *clusters, expected_clusters,
         "Clusters should match expected clusters."
@@ -223,7 +222,7 @@ fn optimal_discrete_k_means_clustering() {
 }
 
 #[test]
-fn optimal_continuous_k_means_clustering() {
+fn optimal_kmeans_clustering() {
     let expected_clusters: Clustering = clustering_from_iterators([0..4, 4..8, 8..12, 12..16]);
     let mut kmeans = KMeans::new(&square_grid()).expect("Creating kmeans should not fail.");
 
@@ -241,11 +240,11 @@ fn optimal_continuous_k_means_clustering() {
 }
 
 #[test]
-fn optimal_discrete_k_median_hierarchy() {
+fn optimal_kmedian_l1_hierarchy() {
     let triangle_grid = triangle_grid();
-    let mut discrete = KMedian::l1(&triangle_grid).expect("Creating discrete should not fail.");
-    assert_eq!(discrete.num_points(), triangle_grid.len());
-    let (score, hierarchy) = discrete.price_of_hierarchy();
+    let mut kmedian = KMedian::l1(&triangle_grid).expect("Creating kmedian should not fail.");
+    assert_eq!(kmedian.num_points(), triangle_grid.len());
+    let (score, hierarchy) = kmedian.price_of_hierarchy();
     assert_eq!(hierarchy.len(), triangle_grid.len() + 1);
 
     let expected_hierarchy: Vec<Clustering> = [
@@ -290,7 +289,7 @@ fn optimal_discrete_k_median_hierarchy() {
 }
 
 #[test]
-fn suboptimal_discrete_k_median_hierarchy() {
+fn suboptimal_kmedian_l1_hierarchy() {
     // Points like this:
     //
     // ..    .     .     ..
@@ -304,9 +303,9 @@ fn suboptimal_discrete_k_median_hierarchy() {
         array![1.0 + 1e-9],
         array![1.0 + 3e-9],
     ];
-    let mut discrete = KMedian::l1(&points).expect("Creating discrete should not fail.");
-    assert_eq!(discrete.num_points(), points.len());
-    let (score, hierarchy) = discrete.price_of_hierarchy();
+    let mut kmedian = KMedian::l1(&points).expect("Creating kmedian should not fail.");
+    assert_eq!(kmedian.num_points(), points.len());
+    let (score, hierarchy) = kmedian.price_of_hierarchy();
     assert_eq!(hierarchy.len(), points.len() + 1);
     assert!(
         (score - (1.0 + 3.0_f64.sqrt()) / 2.0).abs() <= 1e-3,
@@ -334,7 +333,7 @@ fn suboptimal_discrete_k_median_hierarchy() {
 }
 
 #[test]
-fn suboptimal_weighted_discrete_k_median() {
+fn suboptimal_weighted_kmedian_l1() {
     // Points like this:
     //
     // o    .   .    o
@@ -345,15 +344,15 @@ fn suboptimal_weighted_discrete_k_median() {
         (1e6, array![3.0]),
     ];
 
-    let mut discrete =
-        KMedian::weighted_l1(&weighted_points).expect("Creating discrete should not fail.");
-    assert_eq!(discrete.num_points(), weighted_points.len());
+    let mut kmedian =
+        KMedian::weighted_l1(&weighted_points).expect("Creating kmedian should not fail.");
+    assert_eq!(kmedian.num_points(), weighted_points.len());
 
-    let (greedy_score, greedy_hierarchy) = discrete.price_of_greedy();
+    let (greedy_score, greedy_hierarchy) = kmedian.price_of_greedy();
     assert_eq!(greedy_hierarchy.len(), weighted_points.len() + 1);
     assert!(((1.5 - 1e-5)..1.5).contains(&greedy_score));
 
-    let (hierarchy_score, optimal_hierarchy) = discrete.price_of_hierarchy();
+    let (hierarchy_score, optimal_hierarchy) = kmedian.price_of_hierarchy();
     assert_eq!(optimal_hierarchy.len(), weighted_points.len() + 1);
     assert!((1.0..(1.0 + 1e-5)).contains(&hierarchy_score));
 }
@@ -476,7 +475,7 @@ fn linear_exponential_hierarchy() {
         points.push(array![(-(i as f64)).exp()]);
         assert_eq!(points.len(), i);
 
-        let mut kmedian = KMedian::l1(&points).expect("Creating discrete should not fail.");
+        let mut kmedian = KMedian::l1(&points).expect("Creating kmedian should not fail.");
 
         correct_hierarchy(i, kmedian.price_of_greedy());
         correct_hierarchy(i, kmedian.price_of_hierarchy());

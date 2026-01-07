@@ -892,8 +892,6 @@ impl KMedian {
     ///
     /// KMedian::l2(&[array![0.0, 0.0], array![1.0, 2.0]]).unwrap();
     /// ```
-    ///
-    /// TODO: This is uncovered by tests.
     #[inline]
     pub fn l2(points: &[Point]) -> Result<Self, Error> {
         let verified_points = verify_points(points)?;
@@ -1718,6 +1716,15 @@ mod tests {
 
         // In a careless implementation, this would enter an infinite loop.
         clustering.optimise_locally(&mut kmedian);
+    }
+    
+    #[test]
+    fn new_kmedian_l2() {
+        let kmedian = KMedian::l2(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
+        assert_eq!(kmedian.distances.len(), 3);
+        assert_eq!(kmedian.distances[0], vec![0.0, 10.0, 15.0]);
+        assert_eq!(kmedian.distances[1], vec![10.0, 0.0, 5.0]);
+        assert_eq!(kmedian.distances[2], vec![15.0, 5.0, 0.0]);
     }
 
     #[test]

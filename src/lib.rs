@@ -1717,10 +1717,11 @@ mod tests {
         // In a careless implementation, this would enter an infinite loop.
         clustering.optimise_locally(&mut kmedian);
     }
-    
+
     #[test]
     fn new_kmedian_l2() {
-        let kmedian = KMedian::l2(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
+        let kmedian =
+            KMedian::l2(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
         assert_eq!(kmedian.distances.len(), 3);
         assert_eq!(kmedian.distances[0], vec![0.0, 10.0, 15.0]);
         assert_eq!(kmedian.distances[1], vec![10.0, 0.0, 5.0]);
@@ -1729,7 +1730,8 @@ mod tests {
     
     #[test]
     fn new_kmedian_l2_squared() {
-        let kmedian = KMedian::l2_squared(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
+        let kmedian =
+            KMedian::l2_squared(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
         assert_eq!(kmedian.distances.len(), 3);
         assert_eq!(kmedian.distances[0], vec![0.0, 100.0, 225.0]);
         assert_eq!(kmedian.distances[1], vec![100.0, 0.0, 25.0]);

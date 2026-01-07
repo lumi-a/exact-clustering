@@ -969,8 +969,6 @@ impl KMedian {
     ///
     /// KMedian::weighted_l2(&[(1.0, array![0.0, 0.0]), (2.0, array![1.0, 2.0])]).unwrap();
     /// ```
-    ///
-    /// TODO: This is uncovered by tests.
     #[inline]
     pub fn weighted_l2(weighted_points: &[WeightedPoint]) -> Result<Self, Error> {
         let verified_weighted_points = verify_weighted_points(weighted_points)?;
@@ -1727,7 +1725,21 @@ mod tests {
         assert_eq!(kmedian.distances[1], vec![10.0, 0.0, 5.0]);
         assert_eq!(kmedian.distances[2], vec![15.0, 5.0, 0.0]);
     }
-    
+
+    #[test]
+    fn new_weighted_kmedian_l2() {
+        let kmedian = KMedian::weighted_l2(&[
+            (0.25, array![-6.0, -8.0]),
+            (1.0, array![0.0, 0.0]),
+            (4.0, array![3.0, 4.0]),
+        ])
+        .unwrap();
+        assert_eq!(kmedian.distances.len(), 3);
+        assert_eq!(kmedian.distances[0], vec![0.0, 10.0, 30.0]);
+        assert_eq!(kmedian.distances[1], vec![5.0, 0.0, 10.0]);
+        assert_eq!(kmedian.distances[2], vec![7.5, 5.0, 0.0]);
+    }
+
     #[test]
     fn new_kmedian_l2_squared() {
         let kmedian =

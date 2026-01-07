@@ -1726,6 +1726,15 @@ mod tests {
         assert_eq!(kmedian.distances[1], vec![10.0, 0.0, 5.0]);
         assert_eq!(kmedian.distances[2], vec![15.0, 5.0, 0.0]);
     }
+    
+    #[test]
+    fn new_kmedian_l2_squared() {
+        let kmedian = KMedian::l2_squared(&[array![-6.0, -8.0], array![0.0, 0.0], array![3.0, 4.0]]).unwrap();
+        assert_eq!(kmedian.distances.len(), 3);
+        assert_eq!(kmedian.distances[0], vec![0.0, 100.0, 225.0]);
+        assert_eq!(kmedian.distances[1], vec![100.0, 0.0, 25.0]);
+        assert_eq!(kmedian.distances[2], vec![225.0, 25.0, 0.0]);
+    }
 
     #[test]
     fn infinite_loop_optimise_locally_1() {
